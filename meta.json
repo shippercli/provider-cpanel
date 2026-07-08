@@ -1,0 +1,22 @@
+{
+  "name": "cPanel",
+  "slug": "cpanel",
+  "logo": "logo.svg",
+  "status": "beta",
+  "statusNote": "Currently in early testing. Some features may not work as expected on all cPanel instances.",
+  "description": "Automate deployments to shared cPanel hosting accounts. Works with any cPanel provider that gives you API access.",
+  "features": [
+    "Git Version Control",
+    "Domain Management",
+    "Database Management",
+    "SSL Certificates"
+  ],
+  "config": {
+    "provider": "cpanel",
+    "host": "cpanel.example.com",
+    "port": 2083,
+    "username": "myuser",
+    "api_token": "${CPANEL_API_TOKEN}"
+  },
+  "install": "composer require shippercli/provider-cpanel"
+}
