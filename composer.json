@@ -1,0 +1,45 @@
+{
+    "name": "shippercli/provider-cpanel",
+    "description": "cPanel provider plugin for Shipper CLI",
+    "type": "shipper-plugin",
+    "license": "MIT",
+    "require": {
+        "php": "^8.3",
+        "composer-runtime-api": "^2.1",
+        "guzzlehttp/guzzle": "^7.9",
+        "shippercli/contracts": "dev-main"
+    },
+    "require-dev": {
+        "pestphp/pest": "^3.8"
+    },
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/shippercli/contracts"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "ShipperCli\\ProviderCpanel\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "ShipperCli\\ProviderCpanel\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "php vendor/bin/pest --no-coverage"
+    },
+    "extra": {
+        "shipper-plugin": "ShipperCli\\ProviderCpanel\\CpanelPlugin"
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        },
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
