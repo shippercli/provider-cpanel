@@ -124,6 +124,10 @@ final class CpanelProvider implements DeploymentProviderInterface
             $actions[] = "Set PHP runtime: {$runtime['version']}";
         }
 
+        if ($runtime['type'] === 'php' && $runtime['install_dependencies']) {
+            $actions[] = 'Install Composer dependencies when composer.json is present';
+        }
+
         if (\in_array($runtime['type'], ['nodejs', 'python', 'ruby'], true)) {
             $actions[] = "Register or update {$runtime['type']} Passenger application";
         }
@@ -202,6 +206,7 @@ final class CpanelProvider implements DeploymentProviderInterface
                 $this->writeEnvironmentFile($project, $profile, $environment);
             }
 
+            $dependencyState = $this->installPhpDependencies($project, $profile, $runtime);
             $cronState = $this->reconcileCron($project, $profile);
             $redirectState = $this->reconcileRedirects($project, $profile);
             $sslState = $this->configureSsl($project, $profile);
@@ -218,6 +223,7 @@ final class CpanelProvider implements DeploymentProviderInterface
                 'deployment' => $deploymentState,
                 'runtime' => $runtime,
                 'passenger' => $passengerState,
+                'dependencies' => $dependencyState,
                 'databases' => $databaseState['resources'],
                 'cron' => $cronState,
                 'redirects' => $redirectState,
@@ -405,6 +411,120 @@ final class CpanelProvider implements DeploymentProviderInterface
                 'directive' => $directives,
             ]), "Set PHP directives for {$domain}");
         }
+    }
+
+    /**
+     * @param array{type: string, version: string, application_root: string, base_uri: string, install_dependencies: bool, php_ini: array<string, scalar>} $runtime
+     *
+     * @return array{manager: string, working_directory: string}|null
+     */
+    private function installPhpDependencies(object $project, object $profile, array $runtime): ?array
+    {
+        if ($runtime['type'] !== 'php' || ! $runtime['install_dependencies']) {
+            return null;
+        }
+
+        $source = $this->resolveProjectPath($this->projectPath($project));
+        if (! \is_file($source.'/composer.json')) {
+            return null;
+        }
+
+        $workingDirectory = $this->absolutePath($this->deployPath($profile));
+        if (\trim($this->projectWebDirectory($project), '/') !== '') {
+            $workingDirectory .= '/app';
+        }
+
+        $php = $this->stringCpanelOption($profile, 'php_cli_path');
+        if ($php === '') {
+            $php = $runtime['version'] === ''
+                ? '/usr/local/bin/php'
+                : '/opt/cpanel/'.$this->normalizePhpVersion($runtime['version']).'/root/usr/bin/php';
+        }
+        $composer = $this->stringCpanelOption($profile, 'composer_path', '/usr/local/bin/composer');
+        $task = '.shipper-composer-'.\bin2hex(\random_bytes(8));
+        $statusFile = $workingDirectory.'/'.$task.'.status';
+        $logFile = $workingDirectory.'/'.$task.'.log';
+        $lockDirectory = $workingDirectory.'/'.$task.'.lock';
+
+        $script = 'if [ ! -f '.\escapeshellarg($statusFile).' ]'
+            .' && mkdir '.\escapeshellarg($lockDirectory).' 2>/dev/null; then '
+            .'if (cd '.\escapeshellarg($workingDirectory)
+            .' && '.\escapeshellarg($php).' '.\escapeshellarg($composer)
+            .' install --no-dev --no-interaction --prefer-dist --optimize-autoloader)'
+            .' > '.\escapeshellarg($logFile).' 2>&1; then status=0; else status=$?; fi; '
+            .'printf "%s\n" "$status" > '.\escapeshellarg($statusFile).'; '
+            .'rmdir '.\escapeshellarg($lockDirectory).' 2>/dev/null || true; fi';
+        $command = '/bin/sh -c '.\escapeshellarg($script);
+        $cron = $this->required($this->api()->api2('Cron', 'add_line', [
+            'command' => $command,
+            'day' => '*',
+            'hour' => '*',
+            'minute' => '*',
+            'month' => '*',
+            'weekday' => '*',
+        ]), 'Schedule cPanel Composer dependency installation');
+        $linekey = $this->findValueAtKey($cron, 'linekey');
+        if (! \is_scalar($linekey) || (string) $linekey === '') {
+            throw new RuntimeException('cPanel did not return a line key for the Composer dependency task');
+        }
+
+        $status = null;
+        $timeoutValue = $this->cpanelOptions($profile)['dependency_timeout'] ?? 360;
+        $timeout = \is_numeric($timeoutValue) ? \max(60, (int) $timeoutValue) : 360;
+        $deadline = \microtime(true) + $timeout;
+
+        try {
+            do {
+                $result = $this->api()->uapi('Fileman', 'get_file_content', [
+                    'dir' => $workingDirectory,
+                    'file' => \basename($statusFile),
+                    'from_charset' => 'utf-8',
+                    'to_charset' => 'utf-8',
+                ]);
+                $content = $result['success'] ? $this->findValueAtKey($result['data'], 'content') : null;
+                if (\is_string($content) && \preg_match('/^\s*(\d+)\s*$/', $content, $matches) === 1) {
+                    $status = (int) $matches[1];
+                    break;
+                }
+
+                if (\microtime(true) >= $deadline) {
+                    throw new RuntimeException("Timed out waiting for cPanel Composer dependency installation after {$timeout} seconds");
+                }
+
+                \usleep(2_000_000);
+            } while (true);
+
+            if ($status !== 0) {
+                $logResult = $this->api()->uapi('Fileman', 'get_file_content', [
+                    'dir' => $workingDirectory,
+                    'file' => \basename($logFile),
+                    'from_charset' => 'utf-8',
+                    'to_charset' => 'utf-8',
+                ]);
+                $log = $logResult['success'] ? $this->findValueAtKey($logResult['data'], 'content') : null;
+                $details = \is_string($log) && \trim($log) !== ''
+                    ? ': '.\substr(\trim($log), -2000)
+                    : '';
+
+                throw new RuntimeException("cPanel Composer dependency installation failed with exit code {$status}{$details}");
+            }
+        } finally {
+            $this->api()->api2('Cron', 'remove_line', ['linekey' => (string) $linekey]);
+
+            if ($status === 0) {
+                foreach ([$statusFile, $logFile] as $file) {
+                    $this->api()->api2('Fileman', 'fileop', [
+                        'op' => 'unlink',
+                        'sourcefiles' => $this->relativeHomePath($file),
+                    ]);
+                }
+            }
+        }
+
+        return [
+            'manager' => 'composer',
+            'working_directory' => $workingDirectory,
+        ];
     }
 
     /**

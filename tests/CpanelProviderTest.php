@@ -154,6 +154,8 @@ test('public web directory archives keep the application and publish its web roo
     $provider = cpanelProviderWithExistingDomain($client, [
         'deployment_method' => 'fileman',
     ]);
+    $client->responses['api2:Cron:add_line'] = $client->success([['linekey' => '84']]);
+    $client->responses['uapi:Fileman:get_file_content'] = $client->success(['content' => "0\n"]);
     $project = new CpanelTestProject(
         cpanelProviderFixture([
             'composer.json' => '{}',
@@ -175,7 +177,15 @@ test('public web directory archives keep the application and publish its web roo
             'laravel/app/public/index.php',
             'laravel/index.php',
             'laravel/app.css',
-        ]);
+        ])
+        ->and(cpanelProviderCalls($client, 'api2', 'Cron', 'add_line'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'api2', 'Cron', 'remove_line'))->toHaveCount(1);
+
+    $composerTask = cpanelProviderCalls($client, 'api2', 'Cron', 'add_line')[0];
+    expect($composerTask['parameters']['command'])
+        ->toContain('/opt/cpanel/ea-php84/root/usr/bin/php')
+        ->toContain('/usr/local/bin/composer')
+        ->toContain('/home/shipper/laravel/app');
 });
 
 test('php mysql cron redirect ssl and alias lifecycle is applied through cpanel APIs', function (): void {
