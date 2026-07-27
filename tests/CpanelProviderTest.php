@@ -355,6 +355,61 @@ test('git deployment creates updates and deploys a cpanel repository', function 
         ->and($deploy['parameters']['repository_root'])->toBe($repositoryRoot);
 });
 
+test('git deployment waits for the current task instead of a historical success', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, [
+        'deployment_method' => 'git',
+    ]);
+    $repositoryRoot = '/home/shipper/.shipper/repositories/sample/production';
+    $oldTask = [
+        'task_id' => 'old-task',
+        'deploy_id' => 1,
+        'repository_root' => $repositoryRoot,
+        'timestamps' => ['queued' => 1, 'succeeded' => 2],
+    ];
+    $currentTask = [
+        'task_id' => 'current-task',
+        'deploy_id' => 2,
+        'repository_root' => $repositoryRoot,
+        'timestamps' => ['queued' => 3],
+    ];
+    $client->responses['uapi:VersionControl:retrieve'] = $client->success([]);
+    $client->responses['uapi:VersionControlDeployment:create'] = $client->success($currentTask);
+    $client->responseQueues['uapi:VersionControlDeployment:retrieve'] = [
+        $client->success([$oldTask]),
+        $client->success([$oldTask, $currentTask]),
+        $client->success([
+            $oldTask,
+            [...$currentTask, 'timestamps' => ['queued' => 3, 'active' => 4, 'succeeded' => 5]],
+        ]),
+    ];
+
+    expect($provider->apply(
+        new CpanelTestProject('.', [
+            'url' => 'https://github.com/shippercli/sample.git',
+        ]),
+        new CpanelTestProfile([
+            'domain' => 'app.example.com',
+            'deploy_path' => '/git-app',
+            'runtime' => ['type' => 'static'],
+            'cpanel' => [
+                'git_deployment_timeout' => 1,
+                'git_deployment_interval_ms' => 0,
+            ],
+        ]),
+    ))->toBeTrue()
+        ->and(cpanelProviderCalls(
+            $client,
+            'uapi',
+            'VersionControlDeployment',
+            'retrieve',
+        ))->toHaveCount(3);
+
+    $manifest = \json_decode($client->uploadedFiles['.shipper-manifest.json'], true, flags: JSON_THROW_ON_ERROR);
+    expect($manifest['deployment']['task']['task_id'])->toBe('current-task')
+        ->and($manifest['deployment']['task']['timestamps'])->toHaveKey('succeeded');
+});
+
 test('missing subdomains are created with the current uapi surface', function (): void {
     $client = new FakeCpanelApiClient;
     $client->responses['uapi:DomainInfo:domains_data'] = $client->success([
@@ -881,6 +936,10 @@ test('status reports manifest deployment resource usage and releases', function 
             'deployment' => [
                 'method' => 'git',
                 'repository_root' => '/home/shipper/app',
+                'task' => [
+                    'task_id' => 'current-task',
+                    'deploy_id' => 2,
+                ],
             ],
             'previous_release' => [
                 'id' => '20260727010101-deadbeef',
@@ -892,7 +951,8 @@ test('status reports manifest deployment resource usage and releases', function 
         ['id' => 'diskusage', 'usage' => 42],
     ]);
     $client->responses['uapi:VersionControlDeployment:retrieve'] = $client->success([
-        ['state' => 'succeeded'],
+        ['task_id' => 'old-task', 'deploy_id' => 1, 'state' => 'succeeded'],
+        ['task_id' => 'current-task', 'deploy_id' => 2, 'state' => 'succeeded'],
     ]);
     $client->responses['uapi:Fileman:list_files'] = $client->success([
         ['file' => '20260727010101-deadbeef.tar.gz'],
@@ -911,6 +971,8 @@ test('status reports manifest deployment resource usage and releases', function 
         ->and($status['deployment']['method'])->toBe('git')
         ->and($status['previous_release']['id'])->toBe('20260727010101-deadbeef')
         ->and($status['deployment_status']['available'])->toBeTrue()
+        ->and($status['deployment_status']['data'])->toHaveCount(1)
+        ->and($status['deployment_status']['data'][0]['task_id'])->toBe('current-task')
         ->and($status['resource_usage']['data'][0]['usage'])->toBe(42)
         ->and($status['releases'][0]['id'])->toBe('20260727010101-deadbeef');
 });

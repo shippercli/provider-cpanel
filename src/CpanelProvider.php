@@ -364,6 +364,10 @@ final class CpanelProvider implements
                         'repository_root' => $deployment['repository_root'],
                     ]),
                 );
+                $deploymentStatus = $this->scopeGitDeploymentStatus(
+                    $deploymentStatus,
+                    $deployment['task'] ?? null,
+                );
             }
         }
 
@@ -1010,6 +1014,9 @@ final class CpanelProvider implements
         $deployment = $this->required($this->api()->uapi('VersionControlDeployment', 'create', [
             'repository_root' => $repositoryRoot,
         ]), 'Start cPanel Git deployment');
+        if (\is_array($deployment)) {
+            $deployment = $this->waitForGitDeployment($repositoryRoot, $deployment, $profile);
+        }
 
         return [
             'method' => 'git',
@@ -1017,6 +1024,122 @@ final class CpanelProvider implements
             'repository_root' => $repositoryRoot,
             'task' => $deployment,
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $deployment
+     *
+     * @return array<string, mixed>
+     */
+    private function waitForGitDeployment(string $repositoryRoot, array $deployment, object $profile): array
+    {
+        if (! $this->hasGitDeploymentIdentifier($deployment)) {
+            return $deployment;
+        }
+
+        $timeout = \max(1, $this->intCpanelOption($profile, 'git_deployment_timeout', 300));
+        $interval = \max(
+            0,
+            \min(10_000, $this->intCpanelOption($profile, 'git_deployment_interval_ms', 2000)),
+        );
+        $deadline = \microtime(true) + $timeout;
+
+        do {
+            $records = $this->required(
+                $this->api()->uapi('VersionControlDeployment', 'retrieve', [
+                    'repository_root' => $repositoryRoot,
+                ]),
+                'Read cPanel Git deployment status',
+            );
+
+            if (\is_array($records)) {
+                foreach ($records as $record) {
+                    if (! \is_array($record) || ! $this->matchesGitDeploymentTask($record, $deployment)) {
+                        continue;
+                    }
+
+                    $timestamps = \is_array($record['timestamps'] ?? null) ? $record['timestamps'] : [];
+                    $state = \strtolower((string) ($record['state'] ?? $record['status'] ?? ''));
+                    if (\array_key_exists('failed', $timestamps)
+                        || \array_key_exists('cancelled', $timestamps)
+                        || \in_array($state, ['failed', 'cancelled', 'aborted'], true)) {
+                        $logPath = \is_string($record['log_path'] ?? null) ? ' Log: '.$record['log_path'] : '';
+
+                        throw new RuntimeException('cPanel Git deployment task failed.'.$logPath);
+                    }
+
+                    if (\array_key_exists('succeeded', $timestamps) || $state === 'succeeded') {
+                        return [...$deployment, ...$record];
+                    }
+                }
+            }
+
+            if (\microtime(true) >= $deadline) {
+                throw new RuntimeException("cPanel Git deployment task did not finish within {$timeout} seconds");
+            }
+
+            if ($interval > 0) {
+                \usleep($interval * 1000);
+            }
+        } while (true);
+    }
+
+    /**
+     * @param array{available: bool, data: mixed, error?: string}|null $status
+     *
+     * @return array{available: bool, data: mixed, error?: string}|null
+     */
+    private function scopeGitDeploymentStatus(?array $status, mixed $task): ?array
+    {
+        if ($status === null
+            || ! \is_array($task)
+            || ! $this->hasGitDeploymentIdentifier($task)
+            || ! \is_array($status['data'] ?? null)) {
+            return $status;
+        }
+
+        $status['data'] = \array_values(\array_filter(
+            $status['data'],
+            fn (mixed $record): bool => \is_array($record) && $this->matchesGitDeploymentTask($record, $task),
+        ));
+
+        return $status;
+    }
+
+    /** @param array<string, mixed> $task */
+    private function hasGitDeploymentIdentifier(array $task): bool
+    {
+        return $this->gitDeploymentIdentifier($task, 'task_id') !== null
+            || $this->gitDeploymentIdentifier($task, 'deploy_id') !== null;
+    }
+
+    /**
+     * @param array<string, mixed> $record
+     * @param array<string, mixed> $task
+     */
+    private function matchesGitDeploymentTask(array $record, array $task): bool
+    {
+        foreach (['task_id', 'deploy_id'] as $key) {
+            $expected = $this->gitDeploymentIdentifier($task, $key);
+            if ($expected !== null && $expected === $this->gitDeploymentIdentifier($record, $key)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** @param array<string, mixed> $task */
+    private function gitDeploymentIdentifier(array $task, string $key): ?string
+    {
+        $value = $task[$key] ?? null;
+        if (! \is_string($value) && ! \is_int($value)) {
+            return null;
+        }
+
+        $identifier = \trim((string) $value);
+
+        return $identifier === '' ? null : $identifier;
     }
 
     private function gitRepositoryRoot(object $project, object $profile): string
