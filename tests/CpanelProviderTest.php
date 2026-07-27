@@ -372,6 +372,50 @@ test('missing subdomains are created with the current uapi surface', function ()
         ->and(cpanelProviderCalls($client, 'uapi', 'SubDomain', 'addsubdomain'))->toHaveCount(1);
 });
 
+test('domain creation reconciles cpanel state after a timeout response', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responseQueues['uapi:DomainInfo:domains_data'] = [
+        $client->success([
+            'main_domain' => 'example.com',
+            'addon_domains' => [],
+        ]),
+        $client->success([
+            'main_domain' => 'example.com',
+            'addon_domains' => ['app.shippercli.com'],
+        ]),
+    ];
+    $client->responses['api2:AddonDomain:addaddondomain'] = [
+        'success' => false,
+        'message' => 'Operation timed out after 60002 milliseconds',
+        'data' => null,
+        'raw' => [],
+    ];
+    $provider = new CpanelProvider([
+        'host' => 'cpanel.example.com',
+        'username' => 'shipper',
+        'password' => 'secret',
+        'deployment_method' => 'fileman',
+    ], $client);
+
+    expect($provider->apply(
+        new CpanelTestProject(cpanelProviderFixture()),
+        new CpanelTestProfile([
+            'domain' => 'app.shippercli.com',
+            'deploy_path' => '/app',
+            'runtime' => ['type' => 'static'],
+            'cpanel' => [
+                'domain_type' => 'addon',
+                'archive_extraction' => 'direct',
+            ],
+        ]),
+    ))->toBeTrue()
+        ->and(cpanelProviderCalls($client, 'api2', 'AddonDomain', 'addaddondomain'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'uapi', 'DomainInfo', 'domains_data'))->toHaveCount(2);
+
+    $manifest = \json_decode($client->uploadedFiles['.shipper-manifest.json'], true);
+    expect($manifest['domain']['created'])->toBeTrue();
+});
+
 test('custom operations expose uapi api2 and whm surfaces', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [

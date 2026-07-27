@@ -448,22 +448,31 @@ final class CpanelProvider implements
             }
 
             $subdomain = \substr($domain, 0, -\strlen('.'.$primaryDomain));
-            $this->required($this->api()->uapi('SubDomain', 'addsubdomain', [
+            $creation = $this->api()->uapi('SubDomain', 'addsubdomain', [
                 'domain' => $subdomain,
                 'rootdomain' => $primaryDomain,
                 'dir' => $deployPath,
                 'disallowdot' => 0,
-            ]), "Create cPanel subdomain {$domain}");
+            ]);
+            $operation = "Create cPanel subdomain {$domain}";
         } elseif ($type === 'addon') {
             $subdomain = $this->slug($domain);
-            $this->required($this->api()->api2('AddonDomain', 'addaddondomain', [
+            $creation = $this->api()->api2('AddonDomain', 'addaddondomain', [
                 'newdomain' => $domain,
                 'subdomain' => $subdomain,
                 'dir' => \ltrim($deployPath, '/'),
                 'ftp_is_optional' => 1,
-            ]), "Create cPanel addon domain {$domain}");
+            ]);
+            $operation = "Create cPanel addon domain {$domain}";
         } else {
             throw new RuntimeException("Unsupported cPanel domain type: {$type}");
+        }
+
+        if (! $creation['success']) {
+            $reconciled = $this->api()->uapi('DomainInfo', 'domains_data', ['format' => 'hash']);
+            if (! $reconciled['success'] || $this->classifyDomain($reconciled['data'], $domain) === null) {
+                $this->required($creation, $operation);
+            }
         }
 
         return [
