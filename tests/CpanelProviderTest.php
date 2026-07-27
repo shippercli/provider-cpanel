@@ -173,7 +173,8 @@ test('fileman can extract one archive through a monitored cpanel task', function
     $extraction = cpanelProviderCalls($client, 'api2', 'Cron', 'add_line')[0];
     expect($extraction['parameters']['command'])
         ->toContain('/usr/bin/unzip')
-        ->toContain('/home/shipper/archive-app');
+        ->toContain('/home/shipper/archive-app')
+        ->not->toContain('%');
 });
 
 test('public web directory archives keep the application and publish its web root', function (): void {

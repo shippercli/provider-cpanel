@@ -467,7 +467,7 @@ final class CpanelProvider implements DeploymentProviderInterface
             .' && mkdir '.\escapeshellarg($lockDirectory).' 2>/dev/null; then '
             .'if ('.$command.') > '.\escapeshellarg($logFile).' 2>&1; '
             .'then status=0; else status=$?; fi; '
-            .'printf "%s\n" "$status" > '.\escapeshellarg($statusFile).'; '
+            .'echo "$status" > '.\escapeshellarg($statusFile).'; '
             .'rmdir '.\escapeshellarg($lockDirectory).' 2>/dev/null || true; fi';
         $cron = $this->required($this->api()->api2('Cron', 'add_line', [
             'command' => '/bin/sh -c '.\escapeshellarg($script),
