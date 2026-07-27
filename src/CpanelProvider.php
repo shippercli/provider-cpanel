@@ -515,10 +515,7 @@ final class CpanelProvider implements
      */
     private function reconcileDomainCreation(string $domain, object $profile, array $creation): bool
     {
-        $message = \strtolower($creation['message']);
-        $ambiguousTimeout = \str_contains($message, 'timed out')
-            || \str_contains($message, 'timeout')
-            || \str_contains($message, 'curl error 28');
+        $ambiguousTimeout = $this->isAmbiguousTimeout($creation['message']);
         $timeout = $ambiguousTimeout
             ? \max(0, $this->intCpanelOption($profile, 'domain_reconciliation_timeout', 120))
             : 0;
@@ -545,6 +542,54 @@ final class CpanelProvider implements
     }
 
     /**
+     * @param array{success: bool, message: string, data: mixed, raw: array<string, mixed>} $creation
+     */
+    private function reconcileAliasCreation(string $alias, object $profile, array $creation): bool
+    {
+        $ambiguousTimeout = $this->isAmbiguousTimeout($creation['message']);
+        $timeout = $ambiguousTimeout
+            ? \max(0, $this->intCpanelOption(
+                $profile,
+                'alias_reconciliation_timeout',
+                $this->intCpanelOption($profile, 'domain_reconciliation_timeout', 120),
+            ))
+            : 0;
+        $interval = \max(
+            0,
+            \min(10_000, $this->intCpanelOption(
+                $profile,
+                'alias_reconciliation_interval_ms',
+                $this->intCpanelOption($profile, 'domain_reconciliation_interval_ms', 2000),
+            )),
+        );
+        $deadline = \microtime(true) + $timeout;
+
+        do {
+            $reconciled = $this->api()->api2('Park', 'listparkeddomains');
+            if ($reconciled['success'] && $this->containsValueAtKey($reconciled['data'], 'domain', $alias)) {
+                return true;
+            }
+
+            if (! $ambiguousTimeout || \microtime(true) >= $deadline) {
+                return false;
+            }
+
+            if ($interval > 0) {
+                \usleep($interval * 1000);
+            }
+        } while (true);
+    }
+
+    private function isAmbiguousTimeout(string $message): bool
+    {
+        $message = \strtolower($message);
+
+        return \str_contains($message, 'timed out')
+            || \str_contains($message, 'timeout')
+            || \str_contains($message, 'curl error 28');
+    }
+
+    /**
      * @param array{domain: string, type: string, created: bool, primary_domain: string} $domainState
      *
      * @return array<int, array{domain: string, created: bool}>
@@ -566,6 +611,10 @@ final class CpanelProvider implements
 
             $result = $this->api()->api2('Park', 'park', $parameters);
             $created = $result['success'];
+            if (! $created && $this->reconcileAliasCreation($alias, $profile, $result)) {
+                $created = true;
+            }
+
             if (! $created && ! $this->isAlreadyExists($result['message'])) {
                 $this->required($result, "Create cPanel domain alias {$alias}");
             }

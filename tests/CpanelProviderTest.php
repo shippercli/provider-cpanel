@@ -422,6 +422,45 @@ test('domain creation reconciles cpanel state after a timeout response', functio
     expect($manifest['domain']['created'])->toBeTrue();
 });
 
+test('alias creation reconciles cpanel state after a timeout response', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['api2:Park:park'] = [
+        'success' => false,
+        'message' => 'cURL error 28: Operation timed out after 60002 milliseconds',
+        'data' => null,
+        'raw' => [],
+    ];
+    $client->responseQueues['api2:Park:listparkeddomains'] = [
+        $client->success([]),
+        $client->success([
+            ['domain' => 'alias.app.example.com'],
+        ]),
+    ];
+    $provider = cpanelProviderWithExistingDomain($client, [
+        'deployment_method' => 'fileman',
+    ]);
+
+    expect($provider->apply(
+        new CpanelTestProject(cpanelProviderFixture()),
+        new CpanelTestProfile([
+            'domain' => 'app.example.com',
+            'aliases' => ['alias.app.example.com'],
+            'deploy_path' => '/app',
+            'runtime' => ['type' => 'static'],
+            'cpanel' => [
+                'archive_extraction' => 'direct',
+                'alias_reconciliation_timeout' => 1,
+                'alias_reconciliation_interval_ms' => 0,
+            ],
+        ]),
+    ))->toBeTrue()
+        ->and(cpanelProviderCalls($client, 'api2', 'Park', 'park'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'api2', 'Park', 'listparkeddomains'))->toHaveCount(2);
+
+    $manifest = \json_decode($client->uploadedFiles['.shipper-manifest.json'], true);
+    expect($manifest['aliases'][0]['created'])->toBeTrue();
+});
+
 test('custom operations expose uapi api2 and whm surfaces', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [
