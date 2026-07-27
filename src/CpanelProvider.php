@@ -350,7 +350,7 @@ final class CpanelProvider implements
     }
 
     /**
-     * @return array<string, mixed>
+     * @return array<int, string>
      */
     public function logs(object $project, object $profile, int $lines = 100): array
     {
@@ -362,14 +362,7 @@ final class CpanelProvider implements
         ]), 'Read cPanel site error log');
         $entries = $this->logLines($data);
 
-        return [
-            'provider' => $this->getName(),
-            'project' => $this->projectName($project),
-            'profile' => $this->profileName($profile),
-            'domain' => $this->domain($profile),
-            'source' => 'apache_error_log',
-            'lines' => \array_slice($entries, -$limit),
-        ];
+        return \array_slice($entries, -$limit);
     }
 
     public function rollback(

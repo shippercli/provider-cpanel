@@ -744,7 +744,7 @@ test('logs normalize cpanel site error entries and enforce the requested limit',
         2,
     );
 
-    expect($logs['lines'])->toBe(['second line', 'third line']);
+    expect($logs)->toBe(['second line', 'third line']);
     $call = cpanelProviderCalls($client, 'uapi', 'Stats', 'get_site_errors')[0];
     expect($call['parameters']['maxlines'])->toBe(2)
         ->and($call['parameters']['domain'])->toBe('app.example.com');
