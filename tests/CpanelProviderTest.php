@@ -432,6 +432,10 @@ test('alias creation reconciles cpanel state after a timeout response', function
     ];
     $client->responseQueues['api2:Park:listparkeddomains'] = [
         $client->success([]),
+        $client->success([]),
+    ];
+    $client->responseQueues['api2:AddonDomain:listaddondomains'] = [
+        $client->success([]),
         $client->success([
             ['domain' => 'alias.app.example.com'],
         ]),
@@ -455,7 +459,8 @@ test('alias creation reconciles cpanel state after a timeout response', function
         ]),
     ))->toBeTrue()
         ->and(cpanelProviderCalls($client, 'api2', 'Park', 'park'))->toHaveCount(1)
-        ->and(cpanelProviderCalls($client, 'api2', 'Park', 'listparkeddomains'))->toHaveCount(2);
+        ->and(cpanelProviderCalls($client, 'api2', 'Park', 'listparkeddomains'))->toHaveCount(2)
+        ->and(cpanelProviderCalls($client, 'api2', 'AddonDomain', 'listaddondomains'))->toHaveCount(2);
 
     $manifest = \json_decode($client->uploadedFiles['.shipper-manifest.json'], true);
     expect($manifest['aliases'][0]['created'])->toBeTrue();

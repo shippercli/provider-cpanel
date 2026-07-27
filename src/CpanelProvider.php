@@ -570,6 +570,11 @@ final class CpanelProvider implements
                 return true;
             }
 
+            $reconciled = $this->api()->api2('AddonDomain', 'listaddondomains');
+            if ($reconciled['success'] && $this->containsValueAtKey($reconciled['data'], 'domain', $alias)) {
+                return true;
+            }
+
             if (! $ambiguousTimeout || \microtime(true) >= $deadline) {
                 return false;
             }
