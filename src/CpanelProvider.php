@@ -520,7 +520,7 @@ final class CpanelProvider implements
             || \str_contains($message, 'timeout')
             || \str_contains($message, 'curl error 28');
         $timeout = $ambiguousTimeout
-            ? \max(0, $this->intCpanelOption($profile, 'domain_reconciliation_timeout', 30))
+            ? \max(0, $this->intCpanelOption($profile, 'domain_reconciliation_timeout', 120))
             : 0;
         $interval = \max(
             0,
