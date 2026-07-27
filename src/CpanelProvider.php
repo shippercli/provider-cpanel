@@ -200,17 +200,40 @@ final class CpanelProvider implements
 
         try {
             $context = $this->context($project, $profile);
+            $previousManifest = $this->readManifest($profile);
+            if ($previousManifest !== null && ! $this->manifestMatches($previousManifest, $project, $profile)) {
+                throw new RuntimeException(
+                    'Refusing cPanel apply because the Shipper manifest belongs to another deployment',
+                );
+            }
+
             $this->runCustomOperations($profile, 'before_apply', $context);
             $features = $this->required($this->api()->uapi('Features', 'list_features'), 'Discover cPanel features');
             $domainState = $this->ensureDomain($profile);
+            $domainState = $this->preserveOwnership(
+                $domainState,
+                $previousManifest['domain'] ?? null,
+                ['domain', 'type'],
+                ['created'],
+            );
             $runtime = $this->runtimeConfig($project, $profile);
 
             $this->configurePhp($domainState['domain'], $runtime, $profile);
             $databaseState = $this->ensureDatabases($project, $profile);
+            $databaseState['resources'] = $this->preserveDatabaseOwnership(
+                $databaseState['resources'],
+                $previousManifest['databases'] ?? null,
+            );
 
             $method = $this->deploymentMethod($project, $profile);
-            $previousRelease = $this->createReleaseBackup($project, $profile);
+            $previousRelease = $this->createReleaseBackup($project, $profile, $previousManifest);
             $deploymentState = $this->deploy($project, $profile, $method);
+            $deploymentState = $this->preserveOwnership(
+                $deploymentState,
+                $previousManifest['deployment'] ?? null,
+                ['method', 'repository_root'],
+                ['repository_created'],
+            );
             $environment = [
                 ...$this->environmentVariables($project, $profile),
                 ...$databaseState['environment'],
@@ -222,6 +245,14 @@ final class CpanelProvider implements
                 $runtime,
                 $environment,
             );
+            if ($passengerState !== null) {
+                $passengerState = $this->preserveOwnership(
+                    $passengerState,
+                    $previousManifest['passenger'] ?? null,
+                    ['name'],
+                    ['created'],
+                );
+            }
 
             if ($passengerState === null || $this->boolCpanelOption($profile, 'environment_file', false)) {
                 $this->writeEnvironmentFile($project, $profile, $environment);
@@ -232,6 +263,12 @@ final class CpanelProvider implements
             $redirectState = $this->reconcileRedirects($project, $profile);
             $sslState = $this->configureSsl($project, $profile);
             $aliasState = $this->ensureAliases($profile, $domainState);
+            $aliasState = $this->preserveOwnershipList(
+                $aliasState,
+                $previousManifest['aliases'] ?? null,
+                ['domain'],
+                ['created'],
+            );
 
             $manifest = [
                 'version' => 1,
@@ -377,7 +414,7 @@ final class CpanelProvider implements
             $selected = $this->selectRelease($project, $profile, $release);
 
             if ($this->boolCpanelOption($profile, 'backup_before_rollback', false)) {
-                $this->createReleaseBackup($project, $profile, true);
+                $this->createReleaseBackup($project, $profile, $manifest, true);
             }
 
             $deployPath = $manifest['deploy_path'] ?? null;
@@ -1231,6 +1268,100 @@ final class CpanelProvider implements
     }
 
     /**
+     * @param array<string, mixed> $current
+     * @param array<int, string> $identity
+     * @param array<int, string> $flags
+     *
+     * @return array<string, mixed>
+     */
+    private function preserveOwnership(
+        array $current,
+        mixed $previous,
+        array $identity,
+        array $flags,
+    ): array {
+        if (! \is_array($previous)) {
+            return $current;
+        }
+
+        foreach ($identity as $key) {
+            if (($current[$key] ?? null) !== ($previous[$key] ?? null)) {
+                return $current;
+            }
+        }
+
+        foreach ($flags as $flag) {
+            if ((bool) ($previous[$flag] ?? false)) {
+                $current[$flag] = true;
+            }
+        }
+
+        return $current;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $current
+     * @param array<int, string> $identity
+     * @param array<int, string> $flags
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function preserveOwnershipList(
+        array $current,
+        mixed $previous,
+        array $identity,
+        array $flags,
+    ): array {
+        if (! \is_array($previous)) {
+            return $current;
+        }
+
+        foreach ($current as $index => $resource) {
+            foreach ($previous as $candidate) {
+                $merged = $this->preserveOwnership($resource, $candidate, $identity, $flags);
+                if ($merged !== $resource) {
+                    $current[$index] = $merged;
+                    break;
+                }
+            }
+        }
+
+        return $current;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $current
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function preserveDatabaseOwnership(array $current, mixed $previous): array
+    {
+        if (! \is_array($previous)) {
+            return $current;
+        }
+
+        foreach ($current as $index => $database) {
+            foreach ($previous as $candidate) {
+                if (! \is_array($candidate) || ($database['type'] ?? null) !== ($candidate['type'] ?? null)) {
+                    continue;
+                }
+
+                if (($database['name'] ?? null) === ($candidate['name'] ?? null)
+                    && (bool) ($candidate['database_created'] ?? false)) {
+                    $current[$index]['database_created'] = true;
+                }
+
+                if (($database['user'] ?? null) === ($candidate['user'] ?? null)
+                    && (bool) ($candidate['user_created'] ?? false)) {
+                    $current[$index]['user_created'] = true;
+                }
+            }
+        }
+
+        return $current;
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function matchingManifest(object $project, object $profile, string $operation): array
@@ -1255,13 +1386,13 @@ final class CpanelProvider implements
     private function createReleaseBackup(
         object $project,
         object $profile,
+        ?array $manifest,
         bool $force = false,
     ): ?array {
         if (! $force && ! $this->boolCpanelOption($profile, 'backup_before_deploy', false)) {
             return null;
         }
 
-        $manifest = $this->readManifest($profile);
         if ($manifest === null) {
             return null;
         }

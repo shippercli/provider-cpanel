@@ -613,6 +613,124 @@ test('provider reports cpanel API failures without throwing from apply', functio
         ->and($provider->getLastError())->toContain('Authentication failed');
 });
 
+test('repeated apply preserves ownership needed for safe destroy', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responseQueues['uapi:DomainInfo:domains_data'] = [
+        $client->success([
+            'main_domain' => 'example.com',
+            'addon_domains' => [],
+        ]),
+        $client->success([
+            'main_domain' => 'example.com',
+            'addon_domains' => ['app.shippercli.com'],
+        ]),
+    ];
+    $client->responseQueues['uapi:Mysql:list_databases'] = [
+        $client->success([]),
+        $client->success([['database' => 'shipper_app']]),
+    ];
+    $client->responseQueues['uapi:Mysql:list_users'] = [
+        $client->success([]),
+        $client->success([['user' => 'shipper_app']]),
+    ];
+    $client->responseQueues['uapi:VersionControl:retrieve'] = [
+        $client->success([]),
+        $client->success([['repository_root' => '/home/shipper/app']]),
+    ];
+    $client->responseQueues['uapi:PassengerApps:list_applications'] = [
+        $client->success([]),
+        $client->success([['name' => 'shipper-sample-production']]),
+    ];
+    $client->responseQueues['api2:Park:park'] = [
+        $client->success(),
+        [
+            'success' => false,
+            'message' => 'The domain already exists',
+            'data' => null,
+            'raw' => [],
+        ],
+    ];
+    $provider = new CpanelProvider([
+        'host' => 'cpanel.example.com',
+        'username' => 'shipper',
+        'password' => 'secret',
+        'deployment_method' => 'git',
+    ], $client);
+    $project = new CpanelTestProject('.', [
+        'url' => 'https://github.com/shippercli/sample.git',
+    ]);
+    $profile = new CpanelTestProfile([
+        'domain' => 'app.shippercli.com',
+        'deploy_path' => '/app',
+        'aliases' => ['www.app.shippercli.com'],
+        'runtime' => [
+            'type' => 'nodejs',
+            'application_root' => 'app',
+        ],
+        'databases' => [
+            'main' => [
+                'type' => 'mysql',
+                'name' => 'app',
+                'user' => 'app',
+                'password' => 'database-secret',
+            ],
+        ],
+        'cpanel' => ['domain_type' => 'addon'],
+    ]);
+
+    expect($provider->apply($project, $profile))->toBeTrue();
+    $firstManifest = $client->uploadedFiles['.shipper-manifest.json'];
+    $client->responses['uapi:Fileman:get_file_content'] = $client->success([
+        'content' => $firstManifest,
+    ]);
+
+    expect($provider->apply($project, $profile))->toBeTrue();
+    $secondManifestJson = $client->uploadedFiles['.shipper-manifest.json'];
+    $secondManifest = \json_decode($secondManifestJson, true);
+
+    expect($secondManifest['domain']['created'])->toBeTrue()
+        ->and($secondManifest['aliases'][0]['created'])->toBeTrue()
+        ->and($secondManifest['databases'][0]['database_created'])->toBeTrue()
+        ->and($secondManifest['databases'][0]['user_created'])->toBeTrue()
+        ->and($secondManifest['passenger']['created'])->toBeTrue()
+        ->and($secondManifest['deployment']['repository_created'])->toBeTrue();
+
+    $client->responses['uapi:Fileman:get_file_content'] = $client->success([
+        'content' => $secondManifestJson,
+    ]);
+
+    expect($provider->destroy($project, $profile))->toBeTrue()
+        ->and(cpanelProviderCalls($client, 'uapi', 'PassengerApps', 'unregister_application'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'uapi', 'Mysql', 'delete_user'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'uapi', 'Mysql', 'delete_database'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'uapi', 'VersionControl', 'delete'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'api2', 'Park', 'unpark'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'api2', 'AddonDomain', 'deladdondomain'))->toHaveCount(1);
+});
+
+test('apply refuses to overwrite another deployment manifest', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:Fileman:get_file_content'] = $client->success([
+        'content' => \json_encode([
+            'project' => 'another-project',
+            'profile' => 'production',
+            'deploy_path' => '/app',
+        ], JSON_THROW_ON_ERROR),
+    ]);
+    $provider = cpanelProviderWithExistingDomain($client);
+
+    expect($provider->apply(
+        new CpanelTestProject(cpanelProviderFixture()),
+        new CpanelTestProfile([
+            'domain' => 'app.example.com',
+            'deploy_path' => '/app',
+        ]),
+    ))->toBeFalse()
+        ->and($provider->getLastError())
+        ->toBe('Refusing cPanel apply because the Shipper manifest belongs to another deployment')
+        ->and(cpanelProviderCalls($client, 'uapi', 'Features', 'list_features'))->toHaveCount(0);
+});
+
 test('apply archives the previous managed release before deployment', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [
