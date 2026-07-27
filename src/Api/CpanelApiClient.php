@@ -112,11 +112,16 @@ final class CpanelApiClient implements CpanelApiClientInterface
         string $remoteFilename,
         bool $overwrite = true,
     ): array {
-        $handle = @\fopen($localPath, 'rb');
-        if ($handle === false) {
-            return $this->failedResponse("Unable to open file for upload: {$localPath}");
+        return $this->uploadFiles($directory, [$remoteFilename => $localPath], $overwrite);
+    }
+
+    public function uploadFiles(string $directory, array $files, bool $overwrite = true): array
+    {
+        if ($files === []) {
+            return $this->failedResponse('At least one file is required for upload');
         }
 
+        $handles = [];
         $options = $this->authenticationOptions(false, $this->cpanelPort);
         $options['multipart'] = [
             [
@@ -127,12 +132,27 @@ final class CpanelApiClient implements CpanelApiClientInterface
                 'name' => 'overwrite',
                 'contents' => $overwrite ? '1' : '0',
             ],
-            [
-                'name' => 'file-1',
+        ];
+
+        foreach ($files as $remoteFilename => $localPath) {
+            $handle = @\fopen($localPath, 'rb');
+            if ($handle === false) {
+                foreach ($handles as $openedHandle) {
+                    if (\is_resource($openedHandle)) {
+                        \fclose($openedHandle);
+                    }
+                }
+
+                return $this->failedResponse("Unable to open file for upload: {$localPath}");
+            }
+
+            $handles[] = $handle;
+            $options['multipart'][] = [
+                'name' => 'file-'.\count($handles),
                 'contents' => $handle,
                 'filename' => $remoteFilename,
-            ],
-        ];
+            ];
+        }
 
         try {
             $response = $this->client()->request(
@@ -141,12 +161,31 @@ final class CpanelApiClient implements CpanelApiClientInterface
                 $options,
             );
 
-            return $this->normalizeResponse($this->decode((string) $response->getBody()), 'uapi');
+            $result = $this->normalizeResponse($this->decode((string) $response->getBody()), 'uapi');
+            $data = \is_array($result['data']) ? $result['data'] : [];
+            $uploads = \is_array($data['uploads'] ?? null) ? $data['uploads'] : [];
+            if ($result['success'] && (int) ($data['failed'] ?? 0) > 0) {
+                $result['success'] = false;
+                $result['message'] = $this->findValueByKeys($uploads, ['reason', 'error']) ?? 'cPanel file upload failed';
+            }
+
+            foreach ($uploads as $upload) {
+                if (\is_array($upload) && isset($upload['status']) && (int) $upload['status'] !== 1) {
+                    $result['success'] = false;
+                    $result['message'] = $this->findValueByKeys($upload, ['reason', 'error']) ?? 'cPanel file upload failed';
+
+                    break;
+                }
+            }
+
+            return $result;
         } catch (GuzzleException|JsonException $exception) {
             return $this->failedResponse($exception->getMessage());
         } finally {
-            if (\is_resource($handle)) {
-                \fclose($handle);
+            foreach ($handles as $handle) {
+                if (\is_resource($handle)) {
+                    \fclose($handle);
+                }
             }
         }
     }

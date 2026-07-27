@@ -1214,48 +1214,61 @@ final class CpanelProvider implements DeploymentProviderInterface
                 $this->ensureRemoteDirectory($deployDirectory.'/'.$directory);
             }
 
+            $filesByDirectory = [];
             foreach ($files as $entry) {
-                $stream = $zip->getStream($entry);
-                if ($stream === false) {
-                    throw new RuntimeException("Unable to read deployment archive entry: {$entry}");
-                }
-
-                $temporaryPath = \tempnam(\sys_get_temp_dir(), 'shipper-cpanel-file-');
-                if ($temporaryPath === false) {
-                    \fclose($stream);
-
-                    throw new RuntimeException("Unable to create temporary file for archive entry: {$entry}");
-                }
-
-                $output = @\fopen($temporaryPath, 'wb');
-                if ($output === false) {
-                    \fclose($stream);
-                    @\unlink($temporaryPath);
-
-                    throw new RuntimeException("Unable to write temporary file for archive entry: {$entry}");
-                }
-
-                try {
-                    if (\stream_copy_to_stream($stream, $output) === false) {
-                        throw new RuntimeException("Unable to extract deployment archive entry: {$entry}");
-                    }
-                } finally {
-                    \fclose($stream);
-                    \fclose($output);
-                }
-
                 $parent = \dirname($entry);
                 $remoteDirectory = $parent === '.'
                     ? $deployDirectory
                     : $deployDirectory.'/'.$parent;
+                $filesByDirectory[$remoteDirectory][] = $entry;
+            }
 
-                try {
-                    $this->required(
-                        $this->api()->uploadFile($remoteDirectory, $temporaryPath, \basename($entry), true),
-                        "Upload cPanel deployment file {$entry}",
-                    );
-                } finally {
-                    @\unlink($temporaryPath);
+            foreach ($filesByDirectory as $remoteDirectory => $entries) {
+                foreach (\array_chunk($entries, 20) as $batch) {
+                    $uploads = [];
+                    foreach ($batch as $entry) {
+                        $stream = $zip->getStream($entry);
+                        if ($stream === false) {
+                            throw new RuntimeException("Unable to read deployment archive entry: {$entry}");
+                        }
+
+                        $temporaryPath = \tempnam(\sys_get_temp_dir(), 'shipper-cpanel-file-');
+                        if ($temporaryPath === false) {
+                            \fclose($stream);
+
+                            throw new RuntimeException("Unable to create temporary file for archive entry: {$entry}");
+                        }
+
+                        $output = @\fopen($temporaryPath, 'wb');
+                        if ($output === false) {
+                            \fclose($stream);
+                            @\unlink($temporaryPath);
+
+                            throw new RuntimeException("Unable to write temporary file for archive entry: {$entry}");
+                        }
+
+                        try {
+                            if (\stream_copy_to_stream($stream, $output) === false) {
+                                throw new RuntimeException("Unable to extract deployment archive entry: {$entry}");
+                            }
+                        } finally {
+                            \fclose($stream);
+                            \fclose($output);
+                        }
+
+                        $uploads[\basename($entry)] = $temporaryPath;
+                    }
+
+                    try {
+                        $this->required(
+                            $this->api()->uploadFiles($remoteDirectory, $uploads, true),
+                            "Upload cPanel deployment files to {$remoteDirectory}",
+                        );
+                    } finally {
+                        foreach ($uploads as $temporaryPath) {
+                            @\unlink($temporaryPath);
+                        }
+                    }
                 }
             }
         } finally {

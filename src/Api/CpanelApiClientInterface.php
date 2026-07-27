@@ -31,4 +31,11 @@ interface CpanelApiClientInterface
      * @return array{success: bool, message: string, data: mixed, raw: array<string, mixed>}
      */
     public function uploadFile(string $directory, string $localPath, string $remoteFilename, bool $overwrite = true): array;
+
+    /**
+     * @param array<string, string> $files Remote filename to local path.
+     *
+     * @return array{success: bool, message: string, data: mixed, raw: array<string, mixed>}
+     */
+    public function uploadFiles(string $directory, array $files, bool $overwrite = true): array;
 }

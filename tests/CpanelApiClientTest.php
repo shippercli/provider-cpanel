@@ -157,3 +157,35 @@ test('uploads files through authenticated multipart UAPI without double-closing 
         ->toBe('https://cpanel.example.com:2083/execute/Fileman/upload_files')
         ->and($history[0]['request']->getHeaderLine('Content-Type'))->toContain('multipart/form-data');
 });
+
+test('uploads multiple files in one authenticated multipart request', function (): void {
+    $history = [];
+    $client = cpanelTestClient([
+        new Response(200, [], '{"status":1,"data":{"failed":0,"uploads":[{"file":"a.txt","status":1},{"file":"b.txt","status":1}]}}'),
+    ], $history);
+    $api = new CpanelApiClient([
+        'host' => 'cpanel.example.com',
+        'username' => 'shipper',
+        'password' => 'secret',
+    ], $client);
+    $first = \tempnam(\sys_get_temp_dir(), 'shipper-upload-');
+    $second = \tempnam(\sys_get_temp_dir(), 'shipper-upload-');
+    expect($first)->toBeString()
+        ->and($second)->toBeString();
+    \file_put_contents($first, 'first');
+    \file_put_contents($second, 'second');
+
+    try {
+        $result = $api->uploadFiles('/app', [
+            'a.txt' => $first,
+            'b.txt' => $second,
+        ]);
+    } finally {
+        @\unlink($first);
+        @\unlink($second);
+    }
+
+    expect($result['success'])->toBeTrue()
+        ->and($history)->toHaveCount(1)
+        ->and($history[0]['request']->getHeaderLine('Content-Type'))->toContain('multipart/form-data');
+});

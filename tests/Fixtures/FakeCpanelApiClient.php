@@ -48,22 +48,29 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
 
     public function uploadFile(string $directory, string $localPath, string $remoteFilename, bool $overwrite = true): array
     {
-        $contents = \file_get_contents($localPath);
-        if (\is_string($contents)) {
-            $this->uploadedFiles[$remoteFilename] = $contents;
-            $this->uploadedPaths[\trim($directory, '/').'/'.$remoteFilename] = $contents;
-        }
+        return $this->uploadFiles($directory, [$remoteFilename => $localPath], $overwrite);
+    }
 
-        if (\str_ends_with($remoteFilename, '.zip')) {
-            $archive = new ZipArchive;
-            if ($archive->open($localPath) === true) {
-                for ($index = 0; $index < $archive->numFiles; $index++) {
-                    $entry = $archive->getNameIndex($index);
-                    if (\is_string($entry)) {
-                        $this->uploadedArchiveEntries[] = $entry;
+    public function uploadFiles(string $directory, array $files, bool $overwrite = true): array
+    {
+        foreach ($files as $remoteFilename => $localPath) {
+            $contents = \file_get_contents($localPath);
+            if (\is_string($contents)) {
+                $this->uploadedFiles[$remoteFilename] = $contents;
+                $this->uploadedPaths[\trim($directory, '/').'/'.$remoteFilename] = $contents;
+            }
+
+            if (\str_ends_with($remoteFilename, '.zip')) {
+                $archive = new ZipArchive;
+                if ($archive->open($localPath) === true) {
+                    for ($index = 0; $index < $archive->numFiles; $index++) {
+                        $entry = $archive->getNameIndex($index);
+                        if (\is_string($entry)) {
+                            $this->uploadedArchiveEntries[] = $entry;
+                        }
                     }
+                    $archive->close();
                 }
-                $archive->close();
             }
         }
 
@@ -71,7 +78,7 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
             'surface' => 'upload',
             'module' => 'Fileman',
             'function' => 'upload_files',
-            'parameters' => compact('directory', 'localPath', 'remoteFilename', 'overwrite'),
+            'parameters' => compact('directory', 'files', 'overwrite'),
         ];
 
         return $this->success();
