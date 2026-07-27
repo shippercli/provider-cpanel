@@ -1590,7 +1590,10 @@ final class CpanelProvider implements
             );
         } elseif ($type === 'addon') {
             $this->required(
-                $this->api()->api2('AddonDomain', 'deladdondomain', ['domain' => $name]),
+                $this->api()->api2('AddonDomain', 'deladdondomain', [
+                    'domain' => $name,
+                    'subdomain' => $this->slug($name),
+                ]),
                 "Delete Shipper-managed cPanel addon domain {$name}",
             );
         }

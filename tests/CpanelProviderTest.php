@@ -522,6 +522,44 @@ test('destroy removes only resources recorded as created in the shipper manifest
 
     $manifestRead = cpanelProviderCalls($client, 'uapi', 'Fileman', 'get_file_content')[0];
     expect($manifestRead['parameters']['dir'])->toBe('/home/shipper/preview');
+
+    $domainDelete = cpanelProviderCalls($client, 'api2', 'SubDomain', 'delsubdomain')[0];
+    expect($domainDelete['parameters']['domain'])->toBe('preview.example.com');
+});
+
+test('destroy sends the internal subdomain when deleting an addon domain', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:Fileman:get_file_content'] = $client->success([
+        'content' => \json_encode([
+            'project' => 'sample',
+            'profile' => 'production',
+            'domain' => [
+                'domain' => 'app.shippercli.com',
+                'type' => 'addon',
+                'created' => true,
+            ],
+            'deploy_path' => '/app',
+        ], JSON_THROW_ON_ERROR),
+    ]);
+    $provider = new CpanelProvider([
+        'host' => 'cpanel.example.com',
+        'username' => 'shipper',
+        'password' => 'secret',
+    ], $client);
+
+    expect($provider->destroy(
+        new CpanelTestProject('.'),
+        new CpanelTestProfile([
+            'domain' => 'app.shippercli.com',
+            'deploy_path' => '/app',
+        ]),
+    ))->toBeTrue();
+
+    $domainDelete = cpanelProviderCalls($client, 'api2', 'AddonDomain', 'deladdondomain')[0];
+    expect($domainDelete['parameters'])->toMatchArray([
+        'domain' => 'app.shippercli.com',
+        'subdomain' => 'app-shippercli-com',
+    ]);
 });
 
 test('destroy protects the account web root', function (): void {
