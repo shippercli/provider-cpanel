@@ -331,6 +331,7 @@ final class CpanelProvider implements
             $this->destroyGitRepository($manifest);
             $this->destroyAliases($manifest);
             $this->destroyDomain($manifest);
+            $this->destroyReleases($manifest);
             $this->destroyFiles($manifest);
             $this->runCustomOperations($profile, 'after_destroy', $context);
 
@@ -379,6 +380,7 @@ final class CpanelProvider implements
             'applied_at' => $manifestMatches ? ($manifest['applied_at'] ?? null) : null,
             'runtime' => $manifestMatches ? ($manifest['runtime'] ?? null) : null,
             'deployment' => $manifestMatches ? ($manifest['deployment'] ?? null) : null,
+            'previous_release' => $manifestMatches ? ($manifest['previous_release'] ?? null) : null,
             'deployment_status' => $deploymentStatus,
             'domain_status' => $this->optionalApiResult($domainResult),
             'resource_usage' => $this->optionalApiResult($resourceResult),
@@ -1832,6 +1834,47 @@ final class CpanelProvider implements
             'sourcefiles' => $this->relativeHomePath($path),
             'doubledecode' => 1,
         ]), "Remove Shipper-managed cPanel deployment directory {$path}");
+    }
+
+    /**
+     * @param array<string, mixed> $manifest
+     */
+    private function destroyReleases(array $manifest): void
+    {
+        $project = $manifest['project'] ?? null;
+        $profile = $manifest['profile'] ?? null;
+        if (! \is_string($project) || $project === '' || ! \is_string($profile) || $profile === '') {
+            return;
+        }
+
+        $directory = $this->absolutePath(
+            '/.shipper/releases/'.$this->slug($project).'/'.$this->slug($profile),
+        );
+        $result = $this->api()->uapi('Fileman', 'list_files', [
+            'dir' => $this->relativeHomePath($directory),
+            'show_hidden' => 1,
+        ]);
+        if (! $result['success']) {
+            return;
+        }
+
+        $hasReleases = false;
+        foreach ($this->fileNames($result['data']) as $name) {
+            if (\preg_match(self::RELEASE_FILENAME_PATTERN, \basename($name)) === 1) {
+                $hasReleases = true;
+                break;
+            }
+        }
+
+        if (! $hasReleases) {
+            return;
+        }
+
+        $this->required($this->api()->api2('Fileman', 'fileop', [
+            'op' => 'trash',
+            'sourcefiles' => $this->relativeHomePath($directory),
+            'doubledecode' => 1,
+        ]), "Remove Shipper-managed cPanel releases for {$project} ({$profile})");
     }
 
     private function cleanManagedDirectory(string $directory): void

@@ -548,6 +548,9 @@ test('destroy removes only resources recorded as created in the shipper manifest
     $client->responses['uapi:Fileman:get_file_content'] = $client->success([
         'content' => \json_encode($manifest, JSON_THROW_ON_ERROR),
     ]);
+    $client->responses['uapi:Fileman:list_files'] = $client->success([
+        ['file' => '20260727010101-deadbeef.tar.gz'],
+    ]);
     $provider = new CpanelProvider([
         'host' => 'cpanel.example.com',
         'username' => 'shipper',
@@ -568,10 +571,14 @@ test('destroy removes only resources recorded as created in the shipper manifest
         ->and(cpanelProviderCalls($client, 'uapi', 'VersionControl', 'delete'))->toHaveCount(1)
         ->and(cpanelProviderCalls($client, 'api2', 'Park', 'unpark'))->toHaveCount(1)
         ->and(cpanelProviderCalls($client, 'api2', 'SubDomain', 'delsubdomain'))->toHaveCount(1)
-        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toHaveCount(1);
+        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toHaveCount(2);
 
     $manifestRead = cpanelProviderCalls($client, 'uapi', 'Fileman', 'get_file_content')[0];
     expect($manifestRead['parameters']['dir'])->toBe('/home/shipper/preview');
+
+    $fileDeletes = cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop');
+    expect($fileDeletes[0]['parameters']['sourcefiles'])->toBe('.shipper/releases/sample/production')
+        ->and($fileDeletes[1]['parameters']['sourcefiles'])->toBe('preview');
 
     $domainDelete = cpanelProviderCalls($client, 'api2', 'SubDomain', 'delsubdomain')[0];
     expect($domainDelete['parameters']['domain'])->toBe('preview.example.com');
@@ -867,6 +874,10 @@ test('status reports manifest deployment resource usage and releases', function 
                 'method' => 'git',
                 'repository_root' => '/home/shipper/app',
             ],
+            'previous_release' => [
+                'id' => '20260727010101-deadbeef',
+                'filename' => '20260727010101-deadbeef.tar.gz',
+            ],
         ], JSON_THROW_ON_ERROR),
     ]);
     $client->responses['uapi:ResourceUsage:get_usages'] = $client->success([
@@ -890,6 +901,7 @@ test('status reports manifest deployment resource usage and releases', function 
     expect($status['state'])->toBe('deployed')
         ->and($status['manifest_matches'])->toBeTrue()
         ->and($status['deployment']['method'])->toBe('git')
+        ->and($status['previous_release']['id'])->toBe('20260727010101-deadbeef')
         ->and($status['deployment_status']['available'])->toBeTrue()
         ->and($status['resource_usage']['data'][0]['usage'])->toBe(42)
         ->and($status['releases'][0]['id'])->toBe('20260727010101-deadbeef');
