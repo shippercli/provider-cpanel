@@ -498,11 +498,8 @@ final class CpanelProvider implements
             throw new RuntimeException("Unsupported cPanel domain type: {$type}");
         }
 
-        if (! $creation['success']) {
-            $reconciled = $this->api()->uapi('DomainInfo', 'domains_data', ['format' => 'hash']);
-            if (! $reconciled['success'] || $this->classifyDomain($reconciled['data'], $domain) === null) {
-                $this->required($creation, $operation);
-            }
+        if (! $creation['success'] && ! $this->reconcileDomainCreation($domain, $profile, $creation)) {
+            $this->required($creation, $operation);
         }
 
         return [
@@ -511,6 +508,40 @@ final class CpanelProvider implements
             'created' => true,
             'primary_domain' => $primaryDomain,
         ];
+    }
+
+    /**
+     * @param array{success: bool, message: string, data: mixed, raw: array<string, mixed>} $creation
+     */
+    private function reconcileDomainCreation(string $domain, object $profile, array $creation): bool
+    {
+        $message = \strtolower($creation['message']);
+        $ambiguousTimeout = \str_contains($message, 'timed out')
+            || \str_contains($message, 'timeout')
+            || \str_contains($message, 'curl error 28');
+        $timeout = $ambiguousTimeout
+            ? \max(0, $this->intCpanelOption($profile, 'domain_reconciliation_timeout', 30))
+            : 0;
+        $interval = \max(
+            0,
+            \min(10_000, $this->intCpanelOption($profile, 'domain_reconciliation_interval_ms', 2000)),
+        );
+        $deadline = \microtime(true) + $timeout;
+
+        do {
+            $reconciled = $this->api()->uapi('DomainInfo', 'domains_data', ['format' => 'hash']);
+            if ($reconciled['success'] && $this->classifyDomain($reconciled['data'], $domain) !== null) {
+                return true;
+            }
+
+            if (! $ambiguousTimeout || \microtime(true) >= $deadline) {
+                return false;
+            }
+
+            if ($interval > 0) {
+                \usleep($interval * 1000);
+            }
+        } while (true);
     }
 
     /**

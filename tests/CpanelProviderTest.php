@@ -381,6 +381,10 @@ test('domain creation reconciles cpanel state after a timeout response', functio
         ]),
         $client->success([
             'main_domain' => 'example.com',
+            'addon_domains' => [],
+        ]),
+        $client->success([
+            'main_domain' => 'example.com',
             'addon_domains' => ['app.shippercli.com'],
         ]),
     ];
@@ -406,11 +410,13 @@ test('domain creation reconciles cpanel state after a timeout response', functio
             'cpanel' => [
                 'domain_type' => 'addon',
                 'archive_extraction' => 'direct',
+                'domain_reconciliation_timeout' => 1,
+                'domain_reconciliation_interval_ms' => 0,
             ],
         ]),
     ))->toBeTrue()
         ->and(cpanelProviderCalls($client, 'api2', 'AddonDomain', 'addaddondomain'))->toHaveCount(1)
-        ->and(cpanelProviderCalls($client, 'uapi', 'DomainInfo', 'domains_data'))->toHaveCount(2);
+        ->and(cpanelProviderCalls($client, 'uapi', 'DomainInfo', 'domains_data'))->toHaveCount(3);
 
     $manifest = \json_decode($client->uploadedFiles['.shipper-manifest.json'], true);
     expect($manifest['domain']['created'])->toBeTrue();
