@@ -4,19 +4,30 @@
   "logo": "logo.svg",
   "status": "beta",
   "statusNote": "Currently in early testing. Some features may not work as expected on all cPanel instances.",
-  "description": "Automate deployments to shared cPanel hosting accounts. Works with any cPanel provider that gives you API access.",
+  "description": "Deploy and operate applications on cPanel accounts with API access.",
   "features": [
+    "Static and PHP Deployments",
     "Git Version Control",
     "Domain Management",
     "Database Management",
-    "SSL Certificates"
+    "PHP and Composer",
+    "Passenger Applications",
+    "Environment Variables",
+    "Cron Jobs",
+    "Redirects",
+    "SSL Certificates",
+    "Release Backups and Rollback",
+    "Deployment Status",
+    "Error Logs",
+    "Safe Cleanup"
   ],
   "config": {
     "provider": "cpanel",
     "host": "cpanel.example.com",
     "port": 2083,
     "username": "myuser",
-    "api_token": "${CPANEL_API_TOKEN}"
+    "api_token": "${CPANEL_API_TOKEN}",
+    "deployment_method": "auto"
   },
   "install": "composer require shippercli/provider-cpanel"
 }

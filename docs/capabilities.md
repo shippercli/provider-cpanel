@@ -23,7 +23,7 @@ Official sources:
 | Capability | Required behavior | Account API |
 | --- | --- | --- |
 | Capability discovery | Read enabled features and fail with a precise unavailable-feature message | `Features/list_features` |
-| Static and PHP deployment | Upload an archive, extract it without a public web extractor, clean managed artifacts, and preserve unrelated files | `Fileman/upload_files`, API 2 `Fileman/fileop` |
+| Static and PHP deployment | Upload an archive, extract large archives through a temporary marker-owned cron task, clean managed artifacts, and preserve unrelated files | `Fileman/upload_files`, `Fileman/*`, API 2 `Cron/*` |
 | Git deployment | Create or update a cPanel-managed repository, select the branch, trigger deployment, and report task state | `VersionControl/*`, `VersionControlDeployment/*` |
 | Domain lifecycle | Detect existing domains; create and clean up managed subdomains, addon domains, and aliases; control document roots | `DomainInfo/*`, `SubDomain/*`, API 2 `AddonDomain/*`, API 2 `Park/*` |
 | PHP runtime | Discover installed versions, set the vhost version, and configure supported `php.ini` directives | `LangPHP/*` |
@@ -32,8 +32,8 @@ Official sources:
 | MySQL and PostgreSQL | Create databases and users, set passwords and privileges, expose resolved names to deployment environment, and perform opt-in cleanup | `Mysql/*`, `Postgresql/*` |
 | Cron | Reconcile marker-owned cron entries without deleting unrelated user entries | API 2 `Cron/*` |
 | Redirects and HTTPS | Reconcile redirects, start AutoSSL, install custom certificates, and toggle HTTPS redirect where supported | `Mime/*`, `SSL/*` |
-| Backups and rollback | Create or locate a pre-deploy backup/release, report its identifier, and restore or switch back explicitly | `Backup/*`, `Restore/*`, Fileman operations |
-| Observability | Return deployment task state, cPanel errors, domain statistics, resource usage, and relevant log paths | `VersionControlDeployment/retrieve`, `Stats/*`, `ResourceUsage/*`, `LogManager/*` |
+| Backups and rollback | Create deployment-scoped archives outside the managed web root, report release identifiers, enforce retention, and restore an explicit or latest release | Fileman operations and marker-owned cron tasks |
+| Observability | Return manifest and deployment state, Git task state, release identifiers, account resource usage, and domain error-log lines | `VersionControlDeployment/retrieve`, `Stats/get_site_errors`, `ResourceUsage/get_usages` |
 | Destroy safety | Delete only resources recorded as Shipper-managed; refuse destructive cleanup without a matching manifest | Domain, database, Passenger, cron, Git, and Fileman APIs |
 
 ## Long-tail coverage
@@ -60,8 +60,8 @@ The provider can leave beta only when all of the following are true:
 3. Unit tests cover UAPI, API 2, WHM, authentication, response envelopes,
    feature-disabled errors, idempotency, and destroy safety.
 4. Private sample repositories verify raw HTML, raw PHP, Laravel with a real
-   database, cPanel Git deployment, and an actual Passenger Node.js
-   application.
+   database, cPanel Git deployment, and Passenger configuration. A live
+   Node.js HTTP assertion runs only on accounts with an EA Node.js runtime.
 5. Live workflows verify domain creation, PHP version selection, environment
    variables, database/user/privileges, cron, AutoSSL/HTTPS, deployment status,
    rollback, and opt-in cleanup.
@@ -69,3 +69,7 @@ The provider can leave beta only when all of the following are true:
    the exposed password is rotated.
 7. Provider metadata and website documentation match verified behavior rather
    than intended behavior.
+
+The current test account exposes CloudLinux Node Selector but no EA Node.js
+runtime. Shipper verifies Passenger registration and dependency configuration
+there, while the HTTP runtime assertion remains an explicit host prerequisite.
