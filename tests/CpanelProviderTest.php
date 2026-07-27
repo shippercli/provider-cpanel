@@ -148,8 +148,11 @@ test('fileman apply uploads and extracts an authenticated archive', function ():
         ->and($client->uploadedArchiveEntries)->toContain('index.html')
         ->and($client->uploadedFiles)->toHaveKey('.shipper-manifest.json');
 
+    $uploads = cpanelProviderCalls($client, 'upload', 'Fileman', 'upload_files');
     $fileOperations = cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop');
-    expect($fileOperations[0]['parameters']['op'])->toBe('extract')
+    expect($uploads[0]['parameters']['directory'])->toBe('app')
+        ->and($uploads[1]['parameters']['directory'])->toBe('app')
+        ->and($fileOperations[0]['parameters']['op'])->toBe('extract')
         ->and($fileOperations[1]['parameters']['op'])->toBe('trash');
 });
 
@@ -437,6 +440,9 @@ test('destroy removes only resources recorded as created in the shipper manifest
         ->and(cpanelProviderCalls($client, 'api2', 'Park', 'unpark'))->toHaveCount(1)
         ->and(cpanelProviderCalls($client, 'api2', 'SubDomain', 'delsubdomain'))->toHaveCount(1)
         ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toHaveCount(1);
+
+    $manifestRead = cpanelProviderCalls($client, 'uapi', 'Fileman', 'get_file_content')[0];
+    expect($manifestRead['parameters']['dir'])->toBe('/home/shipper/preview');
 });
 
 test('destroy protects the account web root', function (): void {

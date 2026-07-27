@@ -539,11 +539,11 @@ final class CpanelProvider implements DeploymentProviderInterface
 
         try {
             if ($this->boolCpanelOption($profile, 'clean', true)) {
-                $this->cleanManagedDirectory($deployPath);
+                $this->cleanManagedDirectory($this->relativeHomePath($deployPath));
             }
 
             $this->required(
-                $this->api()->uploadFile($deployPath, $archivePath, $archiveName, true),
+                $this->api()->uploadFile($this->relativeHomePath($deployPath), $archivePath, $archiveName, true),
                 'Upload cPanel deployment archive',
             );
 
@@ -897,7 +897,7 @@ final class CpanelProvider implements DeploymentProviderInterface
 
         try {
             $this->required(
-                $this->api()->uploadFile($directory, $temporaryPath, $filename, true),
+                $this->api()->uploadFile($this->relativeHomePath($directory), $temporaryPath, $filename, true),
                 $operation,
             );
         } finally {
@@ -911,7 +911,7 @@ final class CpanelProvider implements DeploymentProviderInterface
     private function readManifest(object $profile): ?array
     {
         $result = $this->api()->uapi('Fileman', 'get_file_content', [
-            'dir' => $this->deployPath($profile),
+            'dir' => $this->absolutePath($this->deployPath($profile)),
             'file' => self::MANIFEST_FILENAME,
             'from_charset' => 'utf-8',
             'to_charset' => 'utf-8',
