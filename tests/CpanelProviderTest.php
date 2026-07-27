@@ -342,6 +342,7 @@ test('git deployment creates updates and deploys a cpanel repository', function 
         ->and(cpanelProviderCalls($client, 'uapi', 'VersionControl', 'create'))->toHaveCount(1)
         ->and(cpanelProviderCalls($client, 'uapi', 'VersionControl', 'update'))->toHaveCount(1)
         ->and(cpanelProviderCalls($client, 'uapi', 'VersionControlDeployment', 'create'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'mkdir'))->toHaveCount(1)
         ->and(cpanelProviderCalls($client, 'upload', 'Fileman', 'upload_files'))->toHaveCount(1)
         ->and($client->uploadedArchiveEntries)->toBe([])
         ->and($client->uploadedFiles)->toHaveKey('.shipper-manifest.json');

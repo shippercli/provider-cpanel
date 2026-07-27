@@ -987,6 +987,8 @@ final class CpanelProvider implements
             throw new RuntimeException('Repository URL is required for cPanel Git deployment');
         }
 
+        $this->ensureRemoteDirectory($this->relativeHomePath($this->deployPath($profile)));
+
         $repositoryRoot = $this->gitRepositoryRoot($project, $profile);
         $repositories = $this->required(
             $this->api()->uapi('VersionControl', 'retrieve'),
