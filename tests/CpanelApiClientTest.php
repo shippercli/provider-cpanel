@@ -103,3 +103,29 @@ test('encodes repeated UAPI parameters without bracket syntax', function (): voi
         ->and($query)->toContain('envvar_name=APP_DEBUG')
         ->and($query)->not->toContain('envvar_name%5B0%5D');
 });
+
+test('uploads files through authenticated multipart UAPI without double-closing the stream', function (): void {
+    $history = [];
+    $client = cpanelTestClient([
+        new Response(200, [], '{"status":1,"data":{"uploads":[{"file":"release.zip"}]}}'),
+    ], $history);
+    $api = new CpanelApiClient([
+        'host' => 'cpanel.example.com',
+        'username' => 'shipper',
+        'password' => 'secret',
+    ], $client);
+    $path = \tempnam(\sys_get_temp_dir(), 'shipper-upload-');
+    expect($path)->toBeString();
+    \file_put_contents($path, 'deployment archive');
+
+    try {
+        $result = $api->uploadFile('/app', $path, 'release.zip');
+    } finally {
+        @\unlink($path);
+    }
+
+    expect($result['success'])->toBeTrue()
+        ->and((string) $history[0]['request']->getUri())
+        ->toBe('https://cpanel.example.com:2083/execute/Fileman/upload_files')
+        ->and($history[0]['request']->getHeaderLine('Content-Type'))->toContain('multipart/form-data');
+});

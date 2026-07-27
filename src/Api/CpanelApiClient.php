@@ -145,7 +145,9 @@ final class CpanelApiClient implements CpanelApiClientInterface
         } catch (GuzzleException|JsonException $exception) {
             return $this->failedResponse($exception->getMessage());
         } finally {
-            \fclose($handle);
+            if (\is_resource($handle)) {
+                \fclose($handle);
+            }
         }
     }
 
