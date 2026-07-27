@@ -189,3 +189,37 @@ test('uploads multiple files in one authenticated multipart request', function (
         ->and($history)->toHaveCount(1)
         ->and($history[0]['request']->getHeaderLine('Content-Type'))->toContain('multipart/form-data');
 });
+
+test('uses cpanel API token authorization when configured', function (): void {
+    $history = [];
+    $client = cpanelTestClient([
+        new Response(200, [], '{"status":1,"data":null}'),
+    ], $history);
+    $api = new CpanelApiClient([
+        'host' => 'cpanel.example.com',
+        'username' => 'shipper',
+        'api_token' => 'cpanel-token',
+    ], $client);
+
+    $api->uapi('Features', 'list_features');
+
+    expect($history[0]['request']->getHeaderLine('Authorization'))
+        ->toBe('cpanel shipper:cpanel-token');
+});
+
+test('uses HTTP Basic authorization for cpanel passwords', function (): void {
+    $history = [];
+    $client = cpanelTestClient([
+        new Response(200, [], '{"status":1,"data":null}'),
+    ], $history);
+    $api = new CpanelApiClient([
+        'host' => 'cpanel.example.com',
+        'username' => 'shipper',
+        'password' => 'secret',
+    ], $client);
+
+    $api->uapi('Features', 'list_features');
+
+    expect($history[0]['request']->getHeaderLine('Authorization'))
+        ->toBe('Basic '.\base64_encode('shipper:secret'));
+});

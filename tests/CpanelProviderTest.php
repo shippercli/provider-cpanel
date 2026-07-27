@@ -529,3 +529,226 @@ test('provider reports cpanel API failures without throwing from apply', functio
     ))->toBeFalse()
         ->and($provider->getLastError())->toContain('Authentication failed');
 });
+
+test('apply archives the previous managed release before deployment', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, [
+        'deployment_method' => 'fileman',
+    ]);
+    $manifest = [
+        'project' => 'sample',
+        'profile' => 'production',
+        'deploy_path' => '/app',
+    ];
+    $client->responseQueues['uapi:Fileman:get_file_content'] = [
+        $client->success(['content' => \json_encode($manifest, JSON_THROW_ON_ERROR)]),
+        $client->success(['content' => "0\n"]),
+    ];
+    $client->responses['api2:Cron:add_line'] = $client->success([['linekey' => '91']]);
+
+    expect($provider->apply(
+        new CpanelTestProject(cpanelProviderFixture()),
+        new CpanelTestProfile([
+            'domain' => 'app.example.com',
+            'deploy_path' => '/app',
+            'runtime' => ['type' => 'static'],
+            'cpanel' => [
+                'archive_extraction' => 'direct',
+                'backup_before_deploy' => true,
+            ],
+        ]),
+    ))->toBeTrue();
+
+    $backupTask = cpanelProviderCalls($client, 'api2', 'Cron', 'add_line')[0];
+    $writtenManifest = \json_decode($client->uploadedFiles['.shipper-manifest.json'], true);
+    expect($backupTask['parameters']['command'])
+        ->toContain('/usr/bin/tar')
+        ->toContain(' -czf ')
+        ->toContain('/.shipper/releases/sample/production/')
+        ->not->toContain('%')
+        ->and($writtenManifest['previous_release']['id'])->toMatch('/^\d{14}-[a-f0-9]{8}$/');
+});
+
+test('rollback restores a selected managed release archive', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client);
+    $manifest = [
+        'project' => 'sample',
+        'profile' => 'production',
+        'deploy_path' => '/app',
+    ];
+    $release = '20260727010101-deadbeef.tar.gz';
+    $client->responseQueues['uapi:Fileman:get_file_content'] = [
+        $client->success(['content' => \json_encode($manifest, JSON_THROW_ON_ERROR)]),
+        $client->success(['content' => "0\n"]),
+    ];
+    $client->responses['uapi:Fileman:list_files'] = $client->success([
+        ['file' => $release],
+    ]);
+    $client->responses['api2:Cron:add_line'] = $client->success([['linekey' => '92']]);
+
+    expect($provider->rollback(
+        new CpanelTestProject('.'),
+        new CpanelTestProfile([
+            'domain' => 'app.example.com',
+            'deploy_path' => '/app',
+        ]),
+        '20260727010101-deadbeef',
+    ))->toBeTrue();
+
+    $restoreTask = cpanelProviderCalls($client, 'api2', 'Cron', 'add_line')[0];
+    expect($restoreTask['parameters']['command'])
+        ->toContain(' -xzf ')
+        ->toContain('/.shipper/releases/sample/production/'.$release);
+});
+
+test('status reports manifest deployment resource usage and releases', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client);
+    $client->responses['uapi:Fileman:get_file_content'] = $client->success([
+        'content' => \json_encode([
+            'project' => 'sample',
+            'profile' => 'production',
+            'deploy_path' => '/app',
+            'applied_at' => '2026-07-27T01:02:03+00:00',
+            'runtime' => ['type' => 'php'],
+            'deployment' => [
+                'method' => 'git',
+                'repository_root' => '/home/shipper/app',
+            ],
+        ], JSON_THROW_ON_ERROR),
+    ]);
+    $client->responses['uapi:ResourceUsage:get_usages'] = $client->success([
+        ['id' => 'diskusage', 'usage' => 42],
+    ]);
+    $client->responses['uapi:VersionControlDeployment:retrieve'] = $client->success([
+        ['state' => 'succeeded'],
+    ]);
+    $client->responses['uapi:Fileman:list_files'] = $client->success([
+        ['file' => '20260727010101-deadbeef.tar.gz'],
+    ]);
+
+    $status = $provider->status(
+        new CpanelTestProject('.'),
+        new CpanelTestProfile([
+            'domain' => 'app.example.com',
+            'deploy_path' => '/app',
+        ]),
+    );
+
+    expect($status['state'])->toBe('deployed')
+        ->and($status['manifest_matches'])->toBeTrue()
+        ->and($status['deployment']['method'])->toBe('git')
+        ->and($status['deployment_status']['available'])->toBeTrue()
+        ->and($status['resource_usage']['data'][0]['usage'])->toBe(42)
+        ->and($status['releases'][0]['id'])->toBe('20260727010101-deadbeef');
+});
+
+test('logs normalize cpanel site error entries and enforce the requested limit', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client);
+    $client->responses['uapi:Stats:get_site_errors'] = $client->success([
+        "first line\nsecond line",
+        ['message' => 'third line'],
+    ]);
+
+    $logs = $provider->logs(
+        new CpanelTestProject('.'),
+        new CpanelTestProfile([
+            'domain' => 'app.example.com',
+            'deploy_path' => '/app',
+        ]),
+        2,
+    );
+
+    expect($logs['lines'])->toBe(['second line', 'third line']);
+    $call = cpanelProviderCalls($client, 'uapi', 'Stats', 'get_site_errors')[0];
+    expect($call['parameters']['maxlines'])->toBe(2)
+        ->and($call['parameters']['domain'])->toBe('app.example.com');
+});
+
+test('python and ruby applications install passenger dependencies', function (
+    string $runtime,
+    string $manager,
+): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, [
+        'deployment_method' => 'fileman',
+    ]);
+    $client->responses['uapi:PassengerApps:list_applications'] = $client->success([]);
+
+    expect($provider->apply(
+        new CpanelTestProject(cpanelProviderFixture()),
+        new CpanelTestProfile([
+            'domain' => 'app.example.com',
+            'deploy_path' => '/app',
+            'runtime' => [
+                'type' => $runtime,
+                'application_root' => 'app',
+                'install_dependencies' => true,
+            ],
+            'cpanel' => ['archive_extraction' => 'direct'],
+        ]),
+    ))->toBeTrue();
+
+    $dependencies = cpanelProviderCalls($client, 'uapi', 'PassengerApps', 'ensure_deps')[0];
+    expect($dependencies['parameters']['type'])->toBe($manager);
+})->with([
+    'Python and pip' => ['python', 'pip'],
+    'Ruby and gem' => ['ruby', 'gem'],
+]);
+
+test('postgresql databases users and privileges use the cpanel postgresql API', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, [
+        'deployment_method' => 'fileman',
+    ]);
+
+    expect($provider->apply(
+        new CpanelTestProject(cpanelProviderFixture()),
+        new CpanelTestProfile([
+            'domain' => 'app.example.com',
+            'deploy_path' => '/app',
+            'runtime' => ['type' => 'static'],
+            'databases' => [
+                'main' => [
+                    'type' => 'postgresql',
+                    'name' => 'app',
+                    'user' => 'app',
+                    'password' => 'database-secret',
+                ],
+            ],
+            'cpanel' => ['archive_extraction' => 'direct'],
+        ]),
+    ))->toBeTrue()
+        ->and(cpanelProviderCalls($client, 'uapi', 'Postgresql', 'create_database'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'uapi', 'Postgresql', 'create_user'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'uapi', 'Postgresql', 'grant_all_privileges'))->toHaveCount(1)
+        ->and($client->uploadedFiles['.env'])->toContain(
+            'DB_CONNECTION="pgsql"',
+            'DB_DATABASE="shipper_app"',
+        );
+});
+
+test('explicit git deployment reports unavailable account features precisely', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, [
+        'deployment_method' => 'git',
+    ]);
+    $client->responses['uapi:VersionControl:retrieve'] = [
+        'success' => false,
+        'message' => 'Git Version Control is not enabled for this account',
+        'data' => null,
+        'raw' => [],
+    ];
+
+    expect($provider->apply(
+        new CpanelTestProject('.', ['url' => 'https://github.com/shippercli/sample.git']),
+        new CpanelTestProfile([
+            'domain' => 'app.example.com',
+            'deploy_path' => '/app',
+        ]),
+    ))->toBeFalse()
+        ->and($provider->getLastError())
+        ->toBe('List cPanel Git repositories failed: Git Version Control is not enabled for this account');
+});

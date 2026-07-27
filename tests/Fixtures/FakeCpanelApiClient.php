@@ -15,6 +15,9 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
     /** @var array<string, array{success: bool, message: string, data: mixed, raw: array<string, mixed>}> */
     public array $responses = [];
 
+    /** @var array<string, array<int, array{success: bool, message: string, data: mixed, raw: array<string, mixed>}>> */
+    public array $responseQueues = [];
+
     /** @var array<int, string> */
     public array $uploadedArchiveEntries = [];
 
@@ -28,14 +31,14 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
     {
         $this->calls[] = compact('module', 'function', 'parameters', 'method') + ['surface' => 'uapi'];
 
-        return $this->responses["uapi:{$module}:{$function}"] ?? $this->success();
+        return $this->response("uapi:{$module}:{$function}");
     }
 
     public function api2(string $module, string $function, array $parameters = []): array
     {
         $this->calls[] = compact('module', 'function', 'parameters') + ['surface' => 'api2'];
 
-        return $this->responses["api2:{$module}:{$function}"] ?? $this->success();
+        return $this->response("api2:{$module}:{$function}");
     }
 
     public function whm(string $function, array $parameters = [], string $method = 'GET'): array
@@ -43,7 +46,7 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
         $module = '';
         $this->calls[] = compact('module', 'function', 'parameters') + ['surface' => 'whm'];
 
-        return $this->responses["whm:{$function}"] ?? $this->success();
+        return $this->response("whm:{$function}");
     }
 
     public function uploadFile(string $directory, string $localPath, string $remoteFilename, bool $overwrite = true): array
@@ -93,5 +96,15 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
             'data' => $data,
             'raw' => [],
         ];
+    }
+
+    /** @return array{success: bool, message: string, data: mixed, raw: array<string, mixed>} */
+    private function response(string $key): array
+    {
+        if (($this->responseQueues[$key] ?? []) !== []) {
+            return \array_shift($this->responseQueues[$key]);
+        }
+
+        return $this->responses[$key] ?? $this->success();
     }
 }

@@ -7,15 +7,26 @@ namespace ShipperCli\ProviderCpanel;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
+use ShipperCli\Contracts\DeploymentLogsProviderInterface;
 use ShipperCli\Contracts\DeploymentProviderInterface;
+use ShipperCli\Contracts\DeploymentRollbackProviderInterface;
+use ShipperCli\Contracts\DeploymentStatusProviderInterface;
 use ShipperCli\ProviderCpanel\Api\CpanelApiClient;
 use ShipperCli\ProviderCpanel\Api\CpanelApiClientInterface;
 use Throwable;
 use ZipArchive;
 
-final class CpanelProvider implements DeploymentProviderInterface
+final class CpanelProvider implements
+    DeploymentLogsProviderInterface,
+    DeploymentProviderInterface,
+    DeploymentRollbackProviderInterface,
+    DeploymentStatusProviderInterface
 {
     private const MANIFEST_FILENAME = '.shipper-manifest.json';
+
+    private const RELEASE_EXTENSION = '.tar.gz';
+
+    private const RELEASE_FILENAME_PATTERN = '/^\d{14}-[a-f0-9]{8}\.tar\.gz$/';
 
     private const SUPPORTED_DEPLOYMENT_METHODS = ['auto', 'fileman', 'git'];
 
@@ -114,6 +125,10 @@ final class CpanelProvider implements DeploymentProviderInterface
             "Create or find domain: {$domain}",
         ];
 
+        if ($this->boolCpanelOption($profile, 'backup_before_deploy', false)) {
+            $actions[] = 'Archive the current Shipper-managed release before deployment';
+        }
+
         if ($method === 'git') {
             $actions[] = 'Create or update cPanel-managed Git repository';
             $actions[] = 'Trigger cPanel Git deployment task';
@@ -194,6 +209,7 @@ final class CpanelProvider implements DeploymentProviderInterface
             $databaseState = $this->ensureDatabases($project, $profile);
 
             $method = $this->deploymentMethod($project, $profile);
+            $previousRelease = $this->createReleaseBackup($project, $profile);
             $deploymentState = $this->deploy($project, $profile, $method);
             $environment = [
                 ...$this->environmentVariables($project, $profile),
@@ -225,6 +241,7 @@ final class CpanelProvider implements DeploymentProviderInterface
                 'domain' => $domainState,
                 'aliases' => $aliasState,
                 'deploy_path' => $this->deployPath($profile),
+                'previous_release' => $previousRelease,
                 'deployment' => $deploymentState,
                 'runtime' => $runtime,
                 'passenger' => $passengerState,
@@ -279,6 +296,110 @@ final class CpanelProvider implements DeploymentProviderInterface
             $this->destroyDomain($manifest);
             $this->destroyFiles($manifest);
             $this->runCustomOperations($profile, 'after_destroy', $context);
+
+            return true;
+        } catch (Throwable $exception) {
+            $this->lastError = $exception->getMessage();
+
+            return false;
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function status(object $project, object $profile): array
+    {
+        $manifest = $this->readManifest($profile);
+        $manifestMatches = $manifest !== null && $this->manifestMatches($manifest, $project, $profile);
+        $domainResult = $this->api()->uapi('DomainInfo', 'domains_data', ['format' => 'hash']);
+        $resourceResult = $this->api()->uapi('ResourceUsage', 'get_usages');
+        $deploymentStatus = null;
+
+        if ($manifestMatches) {
+            $deployment = $manifest['deployment'] ?? null;
+            if (\is_array($deployment)
+                && ($deployment['method'] ?? null) === 'git'
+                && \is_string($deployment['repository_root'] ?? null)) {
+                $deploymentStatus = $this->optionalApiResult(
+                    $this->api()->uapi('VersionControlDeployment', 'retrieve', [
+                        'repository_root' => $deployment['repository_root'],
+                    ]),
+                );
+            }
+        }
+
+        return [
+            'provider' => $this->getName(),
+            'project' => $this->projectName($project),
+            'profile' => $this->profileName($profile),
+            'state' => $manifest === null
+                ? 'not_deployed'
+                : ($manifestMatches ? 'deployed' : 'manifest_mismatch'),
+            'domain' => $this->domain($profile),
+            'deploy_path' => $this->deployPath($profile),
+            'manifest_matches' => $manifestMatches,
+            'applied_at' => $manifestMatches ? ($manifest['applied_at'] ?? null) : null,
+            'runtime' => $manifestMatches ? ($manifest['runtime'] ?? null) : null,
+            'deployment' => $manifestMatches ? ($manifest['deployment'] ?? null) : null,
+            'deployment_status' => $deploymentStatus,
+            'domain_status' => $this->optionalApiResult($domainResult),
+            'resource_usage' => $this->optionalApiResult($resourceResult),
+            'releases' => $this->availableReleases($project, $profile),
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function logs(object $project, object $profile, int $lines = 100): array
+    {
+        $limit = \max(1, \min(5000, $lines));
+        $data = $this->required($this->api()->uapi('Stats', 'get_site_errors', [
+            'domain' => $this->domain($profile),
+            'log' => 'error',
+            'maxlines' => $limit,
+        ]), 'Read cPanel site error log');
+        $entries = $this->logLines($data);
+
+        return [
+            'provider' => $this->getName(),
+            'project' => $this->projectName($project),
+            'profile' => $this->profileName($profile),
+            'domain' => $this->domain($profile),
+            'source' => 'apache_error_log',
+            'lines' => \array_slice($entries, -$limit),
+        ];
+    }
+
+    public function rollback(
+        object $project,
+        object $profile,
+        ?string $release = null,
+    ): bool {
+        $this->lastError = '';
+
+        try {
+            $manifest = $this->matchingManifest($project, $profile, 'rollback');
+            $selected = $this->selectRelease($project, $profile, $release);
+
+            if ($this->boolCpanelOption($profile, 'backup_before_rollback', false)) {
+                $this->createReleaseBackup($project, $profile, true);
+            }
+
+            $deployPath = $manifest['deploy_path'] ?? null;
+            if (! \is_string($deployPath) || ! $this->isSafeManagedPath($deployPath)) {
+                throw new RuntimeException('Refusing cPanel rollback because the manifest deploy path is unsafe');
+            }
+
+            $deployDirectory = $this->relativeHomePath($deployPath);
+            $this->cleanManagedDirectory($deployDirectory);
+            $this->ensureRemoteDirectory($deployDirectory);
+
+            $tar = $this->stringCpanelOption($profile, 'tar_path', '/usr/bin/tar');
+            $command = \escapeshellarg($tar).' -xzf '.\escapeshellarg($selected['path'])
+                .' -C '.\escapeshellarg($this->absolutePath($deployPath));
+            $this->runOneTimeCommand("Restore cPanel release {$selected['id']}", $command, $profile);
 
             return true;
         } catch (Throwable $exception) {
@@ -1096,6 +1217,218 @@ final class CpanelProvider implements DeploymentProviderInterface
         $manifest = \json_decode($content, true);
 
         return \is_array($manifest) ? $manifest : null;
+    }
+
+    /**
+     * @param array<string, mixed> $manifest
+     */
+    private function manifestMatches(array $manifest, object $project, object $profile): bool
+    {
+        return ($manifest['project'] ?? null) === $this->projectName($project)
+            && ($manifest['profile'] ?? null) === $this->profileName($profile);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function matchingManifest(object $project, object $profile, string $operation): array
+    {
+        $manifest = $this->readManifest($profile);
+        if ($manifest === null) {
+            throw new RuntimeException("Refusing cPanel {$operation} because no Shipper manifest exists");
+        }
+
+        if (! $this->manifestMatches($manifest, $project, $profile)) {
+            throw new RuntimeException(
+                "Refusing cPanel {$operation} because the Shipper manifest belongs to another deployment",
+            );
+        }
+
+        return $manifest;
+    }
+
+    /**
+     * @return array{id: string, filename: string, path: string, created_at: string}|null
+     */
+    private function createReleaseBackup(
+        object $project,
+        object $profile,
+        bool $force = false,
+    ): ?array {
+        if (! $force && ! $this->boolCpanelOption($profile, 'backup_before_deploy', false)) {
+            return null;
+        }
+
+        $manifest = $this->readManifest($profile);
+        if ($manifest === null) {
+            return null;
+        }
+
+        if (! $this->manifestMatches($manifest, $project, $profile)) {
+            throw new RuntimeException(
+                'Refusing cPanel release backup because the Shipper manifest belongs to another deployment',
+            );
+        }
+
+        $deployPath = $manifest['deploy_path'] ?? null;
+        if (! \is_string($deployPath) || ! $this->isSafeManagedPath($deployPath)) {
+            throw new RuntimeException('Refusing cPanel release backup because the manifest deploy path is unsafe');
+        }
+
+        $releaseDirectory = $this->releaseDirectory($project, $profile);
+        $this->ensureRemoteDirectory($this->relativeHomePath($releaseDirectory));
+
+        $filename = \gmdate('YmdHis').'-'.\bin2hex(\random_bytes(4)).self::RELEASE_EXTENSION;
+        $releasePath = $releaseDirectory.'/'.$filename;
+        $tar = $this->stringCpanelOption($profile, 'tar_path', '/usr/bin/tar');
+        $command = \escapeshellarg($tar).' -czf '.\escapeshellarg($releasePath)
+            .' -C '.\escapeshellarg($this->absolutePath($deployPath)).' .';
+        $this->runOneTimeCommand('Archive current cPanel release', $command, $profile);
+        $this->pruneReleases(
+            $project,
+            $profile,
+            $this->intCpanelOption($profile, 'release_retention', 5),
+        );
+
+        return [
+            'id' => \substr($filename, 0, -\strlen(self::RELEASE_EXTENSION)),
+            'filename' => $filename,
+            'path' => $releasePath,
+            'created_at' => \gmdate(DATE_ATOM),
+        ];
+    }
+
+    /**
+     * @return array<int, array{id: string, filename: string, path: string}>
+     */
+    private function availableReleases(object $project, object $profile): array
+    {
+        $directory = $this->releaseDirectory($project, $profile);
+        $result = $this->api()->uapi('Fileman', 'list_files', [
+            'dir' => $this->relativeHomePath($directory),
+            'show_hidden' => 1,
+        ]);
+        if (! $result['success']) {
+            return [];
+        }
+
+        $filenames = [];
+        foreach ($this->fileNames($result['data']) as $name) {
+            $filename = \basename($name);
+            if (\preg_match(self::RELEASE_FILENAME_PATTERN, $filename) === 1) {
+                $filenames[$filename] = true;
+            }
+        }
+        $filenames = \array_keys($filenames);
+        \rsort($filenames, SORT_STRING);
+
+        return \array_map(
+            static fn (string $filename): array => [
+                'id' => \substr($filename, 0, -\strlen(self::RELEASE_EXTENSION)),
+                'filename' => $filename,
+                'path' => $directory.'/'.$filename,
+            ],
+            $filenames,
+        );
+    }
+
+    /**
+     * @return array{id: string, filename: string, path: string}
+     */
+    private function selectRelease(
+        object $project,
+        object $profile,
+        ?string $release,
+    ): array {
+        $releases = $this->availableReleases($project, $profile);
+        if ($releases === []) {
+            throw new RuntimeException('No cPanel release archives are available for rollback');
+        }
+
+        if ($release === null || \trim($release) === '') {
+            return $releases[0];
+        }
+
+        $requested = \trim($release);
+        if (\basename($requested) !== $requested) {
+            throw new RuntimeException('cPanel release must be an archive ID, not a path');
+        }
+        $requested = \str_ends_with($requested, self::RELEASE_EXTENSION)
+            ? $requested
+            : $requested.self::RELEASE_EXTENSION;
+
+        foreach ($releases as $candidate) {
+            if ($candidate['filename'] === $requested) {
+                return $candidate;
+            }
+        }
+
+        throw new RuntimeException("cPanel release archive does not exist: {$release}");
+    }
+
+    private function pruneReleases(object $project, object $profile, int $retention): void
+    {
+        $releases = $this->availableReleases($project, $profile);
+        foreach (\array_slice($releases, \max(1, $retention)) as $release) {
+            $this->required($this->api()->api2('Fileman', 'fileop', [
+                'op' => 'unlink',
+                'sourcefiles' => $this->relativeHomePath($release['path']),
+            ]), "Prune cPanel release {$release['id']}");
+        }
+    }
+
+    private function releaseDirectory(object $project, object $profile): string
+    {
+        return $this->absolutePath(
+            '/.shipper/releases/'.$this->slug($this->projectName($project))
+            .'/'.$this->slug($this->profileName($profile)),
+        );
+    }
+
+    /**
+     * @param array{success: bool, message: string, data: mixed, raw: array<string, mixed>} $result
+     *
+     * @return array{available: bool, data?: mixed, error?: string}
+     */
+    private function optionalApiResult(array $result): array
+    {
+        if ($result['success']) {
+            return [
+                'available' => true,
+                'data' => $result['data'],
+            ];
+        }
+
+        return [
+            'available' => false,
+            'error' => $result['message'],
+        ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function logLines(mixed $value): array
+    {
+        if (\is_string($value)) {
+            $lines = \preg_split('/\R/', $value) ?: [];
+
+            return \array_values(\array_filter(
+                \array_map('\trim', $lines),
+                static fn (string $line): bool => $line !== '',
+            ));
+        }
+
+        if (! \is_array($value)) {
+            return [];
+        }
+
+        $lines = [];
+        foreach ($value as $entry) {
+            $lines = [...$lines, ...$this->logLines($entry)];
+        }
+
+        return $lines;
     }
 
     /**
@@ -2281,6 +2614,13 @@ final class CpanelProvider implements DeploymentProviderInterface
         $options = $this->cpanelOptions($profile);
 
         return isset($options[$key]) ? (bool) $options[$key] : $default;
+    }
+
+    private function intCpanelOption(object $profile, string $key, int $default): int
+    {
+        $value = $this->cpanelOptions($profile)[$key] ?? null;
+
+        return \is_numeric($value) ? (int) $value : $default;
     }
 
     /**
