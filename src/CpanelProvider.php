@@ -619,9 +619,12 @@ final class CpanelProvider implements DeploymentProviderInterface
         }
 
         $name = 'shipper-'.$this->slug($this->projectName($project)).'-'.$this->slug($this->profileName($profile));
-        $path = $runtime['application_root'] !== ''
+        $configuredPath = $runtime['application_root'] !== ''
             ? $runtime['application_root']
             : $this->relativeHomePath($this->deployPath($profile));
+        $relativePath = $this->relativeHomePath($configuredPath);
+        $registrationPath = '/'.$relativePath;
+        $absolutePath = $this->absolutePath($registrationPath);
         $applications = $this->required(
             $this->api()->uapi('PassengerApps', 'list_applications'),
             'List cPanel Passenger applications',
@@ -629,7 +632,7 @@ final class CpanelProvider implements DeploymentProviderInterface
         $exists = $this->containsValueAtKey($applications, 'name', $name);
         $parameters = [
             'name' => $name,
-            'path' => $path,
+            'path' => $exists ? $absolutePath : $registrationPath,
             'domain' => $this->domain($profile),
             'base_uri' => $runtime['base_uri'],
             'envvar_name' => \array_keys($environment),
@@ -649,10 +652,19 @@ final class CpanelProvider implements DeploymentProviderInterface
                 'ruby' => 'gem',
             };
             $this->required($this->api()->uapi('PassengerApps', 'ensure_deps', [
-                'app_path' => $this->absolutePath('/'.$path),
+                'app_path' => $absolutePath,
                 'type' => $dependencyType,
             ]), 'Install cPanel Passenger application dependencies');
         }
+
+        $restartDirectory = $relativePath.'/tmp';
+        $this->ensureRemoteDirectory($restartDirectory);
+        $this->uploadContent(
+            $restartDirectory,
+            'restart.txt',
+            \gmdate(DATE_ATOM)."\n",
+            'Restart cPanel Passenger application',
+        );
 
         return [
             'name' => $name,

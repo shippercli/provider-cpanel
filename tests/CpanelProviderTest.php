@@ -276,8 +276,9 @@ test('node applications are registered with passenger', function (): void {
         ->and(cpanelProviderCalls($client, 'uapi', 'PassengerApps', 'ensure_deps'))->toHaveCount(0);
 
     $registration = cpanelProviderCalls($client, 'uapi', 'PassengerApps', 'register_application')[0];
-    expect($registration['parameters']['path'])->toBe('node-app')
-        ->and($registration['parameters']['domain'])->toBe('app.example.com');
+    expect($registration['parameters']['path'])->toBe('/node-app')
+        ->and($registration['parameters']['domain'])->toBe('app.example.com')
+        ->and($client->uploadedPaths)->toHaveKey('node-app/tmp/restart.txt');
 });
 
 test('git deployment creates updates and deploys a cpanel repository', function (): void {
