@@ -81,6 +81,11 @@ final class CpanelProvider implements DeploymentProviderInterface
             $errors[] = 'cPanel deployment_method must be auto, fileman, or git';
         }
 
+        $archiveExtraction = $this->stringCpanelOption($profile, 'archive_extraction', 'auto');
+        if (! \in_array($archiveExtraction, ['auto', 'cron', 'direct'], true)) {
+            $errors[] = 'cPanel archive_extraction must be auto, cron, or direct';
+        }
+
         $runtime = $this->runtimeConfig($project, $profile);
         if (! \in_array($runtime['type'], self::SUPPORTED_RUNTIME_TYPES, true)) {
             $errors[] = 'cPanel runtime type must be static, php, nodejs, python, or ruby';
@@ -115,7 +120,7 @@ final class CpanelProvider implements DeploymentProviderInterface
         } elseif ($method === 'fileman') {
             $actions[] = 'Build deployment archive locally';
             $actions[] = 'Upload archive through authenticated Fileman UAPI';
-            $actions[] = 'Extract archive through cPanel API 2 without a public web extractor';
+            $actions[] = 'Extract large archives through a monitored cPanel cron task';
         } else {
             $actions[] = 'Use cPanel Git when available, otherwise use authenticated Fileman deployment';
         }
@@ -441,42 +446,52 @@ final class CpanelProvider implements DeploymentProviderInterface
                 : '/opt/cpanel/'.$this->normalizePhpVersion($runtime['version']).'/root/usr/bin/php';
         }
         $composer = $this->stringCpanelOption($profile, 'composer_path', '/usr/local/bin/composer');
-        $task = '.shipper-composer-'.\bin2hex(\random_bytes(8));
-        $statusFile = $workingDirectory.'/'.$task.'.status';
-        $logFile = $workingDirectory.'/'.$task.'.log';
-        $lockDirectory = $workingDirectory.'/'.$task.'.lock';
+        $command = 'cd '.\escapeshellarg($workingDirectory)
+            .' && '.\escapeshellarg($php).' '.\escapeshellarg($composer)
+            .' install --no-dev --no-interaction --prefer-dist --optimize-autoloader';
+        $this->runOneTimeCommand('Install cPanel Composer dependencies', $command, $profile);
 
+        return [
+            'manager' => 'composer',
+            'working_directory' => $workingDirectory,
+        ];
+    }
+
+    private function runOneTimeCommand(string $label, string $command, object $profile): void
+    {
+        $task = '.shipper-task-'.\bin2hex(\random_bytes(8));
+        $statusFile = $this->absolutePath('/'.$task.'.status');
+        $logFile = $this->absolutePath('/'.$task.'.log');
+        $lockDirectory = $this->absolutePath('/'.$task.'.lock');
         $script = 'if [ ! -f '.\escapeshellarg($statusFile).' ]'
             .' && mkdir '.\escapeshellarg($lockDirectory).' 2>/dev/null; then '
-            .'if (cd '.\escapeshellarg($workingDirectory)
-            .' && '.\escapeshellarg($php).' '.\escapeshellarg($composer)
-            .' install --no-dev --no-interaction --prefer-dist --optimize-autoloader)'
-            .' > '.\escapeshellarg($logFile).' 2>&1; then status=0; else status=$?; fi; '
+            .'if ('.$command.') > '.\escapeshellarg($logFile).' 2>&1; '
+            .'then status=0; else status=$?; fi; '
             .'printf "%s\n" "$status" > '.\escapeshellarg($statusFile).'; '
             .'rmdir '.\escapeshellarg($lockDirectory).' 2>/dev/null || true; fi';
-        $command = '/bin/sh -c '.\escapeshellarg($script);
         $cron = $this->required($this->api()->api2('Cron', 'add_line', [
-            'command' => $command,
+            'command' => '/bin/sh -c '.\escapeshellarg($script),
             'day' => '*',
             'hour' => '*',
             'minute' => '*',
             'month' => '*',
             'weekday' => '*',
-        ]), 'Schedule cPanel Composer dependency installation');
+        ]), "Schedule {$label}");
         $linekey = $this->findValueAtKey($cron, 'linekey');
         if (! \is_scalar($linekey) || (string) $linekey === '') {
-            throw new RuntimeException('cPanel did not return a line key for the Composer dependency task');
+            throw new RuntimeException("cPanel did not return a line key for {$label}");
         }
 
         $status = null;
-        $timeoutValue = $this->cpanelOptions($profile)['dependency_timeout'] ?? 360;
+        $options = $this->cpanelOptions($profile);
+        $timeoutValue = $options['task_timeout'] ?? $options['dependency_timeout'] ?? 360;
         $timeout = \is_numeric($timeoutValue) ? \max(60, (int) $timeoutValue) : 360;
         $deadline = \microtime(true) + $timeout;
 
         try {
             do {
                 $result = $this->api()->uapi('Fileman', 'get_file_content', [
-                    'dir' => $workingDirectory,
+                    'dir' => \dirname($statusFile),
                     'file' => \basename($statusFile),
                     'from_charset' => 'utf-8',
                     'to_charset' => 'utf-8',
@@ -488,7 +503,7 @@ final class CpanelProvider implements DeploymentProviderInterface
                 }
 
                 if (\microtime(true) >= $deadline) {
-                    throw new RuntimeException("Timed out waiting for cPanel Composer dependency installation after {$timeout} seconds");
+                    throw new RuntimeException("Timed out waiting for {$label} after {$timeout} seconds");
                 }
 
                 \usleep(2_000_000);
@@ -496,7 +511,7 @@ final class CpanelProvider implements DeploymentProviderInterface
 
             if ($status !== 0) {
                 $logResult = $this->api()->uapi('Fileman', 'get_file_content', [
-                    'dir' => $workingDirectory,
+                    'dir' => \dirname($logFile),
                     'file' => \basename($logFile),
                     'from_charset' => 'utf-8',
                     'to_charset' => 'utf-8',
@@ -506,7 +521,7 @@ final class CpanelProvider implements DeploymentProviderInterface
                     ? ': '.\substr(\trim($log), -2000)
                     : '';
 
-                throw new RuntimeException("cPanel Composer dependency installation failed with exit code {$status}{$details}");
+                throw new RuntimeException("{$label} failed with exit code {$status}{$details}");
             }
         } finally {
             $this->api()->api2('Cron', 'remove_line', ['linekey' => (string) $linekey]);
@@ -520,11 +535,6 @@ final class CpanelProvider implements DeploymentProviderInterface
                 }
             }
         }
-
-        return [
-            'manager' => 'composer',
-            'working_directory' => $workingDirectory,
-        ];
     }
 
     /**
@@ -664,15 +674,55 @@ final class CpanelProvider implements DeploymentProviderInterface
                 $this->cleanManagedDirectory($deployDirectory);
             }
 
-            $this->uploadArchiveContents($archivePath, $deployDirectory);
+            $extraction = $this->archiveExtractionMethod($profile, $archivePath);
+            if ($extraction === 'cron') {
+                $archiveName = '.shipper-release-'.\bin2hex(\random_bytes(8)).'.zip';
+                $this->required(
+                    $this->api()->uploadFile($deployDirectory, $archivePath, $archiveName, true),
+                    'Upload cPanel deployment archive',
+                );
+
+                $absoluteDeployDirectory = $this->absolutePath($deployPath);
+                $remoteArchive = $absoluteDeployDirectory.'/'.$archiveName;
+                $unzip = $this->stringCpanelOption($profile, 'unzip_path', '/usr/bin/unzip');
+                $command = \escapeshellarg($unzip).' -oq '.\escapeshellarg($remoteArchive)
+                    .' -d '.\escapeshellarg($absoluteDeployDirectory)
+                    .' && /bin/rm -f '.\escapeshellarg($remoteArchive);
+                $this->runOneTimeCommand('Extract cPanel deployment archive', $command, $profile);
+            } else {
+                $this->uploadArchiveContents($archivePath, $deployDirectory);
+            }
 
             return [
                 'method' => 'fileman',
+                'extraction' => $extraction,
                 'repository_created' => false,
                 'repository_root' => null,
             ];
         } finally {
             @\unlink($archivePath);
+        }
+    }
+
+    private function archiveExtractionMethod(object $profile, string $archivePath): string
+    {
+        $method = \strtolower($this->stringCpanelOption($profile, 'archive_extraction', 'auto'));
+        if ($method === 'cron' || $method === 'direct') {
+            return $method;
+        }
+        if ($method !== 'auto') {
+            throw new RuntimeException("Unsupported cPanel archive extraction method: {$method}");
+        }
+
+        $archive = new ZipArchive;
+        if ($archive->open($archivePath) !== true) {
+            throw new RuntimeException("Unable to inspect cPanel deployment archive: {$archivePath}");
+        }
+
+        try {
+            return $archive->numFiles > 40 ? 'cron' : 'direct';
+        } finally {
+            $archive->close();
         }
     }
 

@@ -149,6 +149,33 @@ test('fileman apply creates directories and uploads mapped files', function (): 
         ->and($client->uploadedFiles)->toHaveKey('.shipper-manifest.json');
 });
 
+test('fileman can extract one archive through a monitored cpanel task', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, [
+        'deployment_method' => 'fileman',
+    ]);
+    $client->responses['api2:Cron:add_line'] = $client->success([['linekey' => '83']]);
+    $client->responses['uapi:Fileman:get_file_content'] = $client->success(['content' => "0\n"]);
+
+    expect($provider->apply(
+        new CpanelTestProject(cpanelProviderFixture()),
+        new CpanelTestProfile([
+            'domain' => 'app.example.com',
+            'deploy_path' => '/archive-app',
+            'runtime' => ['type' => 'static'],
+            'cpanel' => ['archive_extraction' => 'cron'],
+        ]),
+    ))->toBeTrue()
+        ->and(cpanelProviderCalls($client, 'api2', 'Cron', 'add_line'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'api2', 'Cron', 'remove_line'))->toHaveCount(1)
+        ->and($client->uploadedArchiveEntries)->toContain('index.html');
+
+    $extraction = cpanelProviderCalls($client, 'api2', 'Cron', 'add_line')[0];
+    expect($extraction['parameters']['command'])
+        ->toContain('/usr/bin/unzip')
+        ->toContain('/home/shipper/archive-app');
+});
+
 test('public web directory archives keep the application and publish its web root', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [
