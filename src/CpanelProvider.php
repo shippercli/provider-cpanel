@@ -1756,7 +1756,7 @@ final class CpanelProvider implements
             $this->required(
                 $this->api()->api2('AddonDomain', 'deladdondomain', [
                     'domain' => $name,
-                    'subdomain' => $this->slug($name).'.'.$primaryDomain,
+                    'subdomain' => $this->slug($name).'_'.$primaryDomain,
                 ]),
                 "Delete Shipper-managed cPanel addon domain {$name}",
             );
