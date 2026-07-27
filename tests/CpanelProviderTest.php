@@ -537,6 +537,7 @@ test('destroy sends the internal subdomain when deleting an addon domain', funct
                 'domain' => 'app.shippercli.com',
                 'type' => 'addon',
                 'created' => true,
+                'primary_domain' => 'example.com',
             ],
             'deploy_path' => '/app',
         ], JSON_THROW_ON_ERROR),
@@ -558,7 +559,7 @@ test('destroy sends the internal subdomain when deleting an addon domain', funct
     $domainDelete = cpanelProviderCalls($client, 'api2', 'AddonDomain', 'deladdondomain')[0];
     expect($domainDelete['parameters'])->toMatchArray([
         'domain' => 'app.shippercli.com',
-        'subdomain' => 'app-shippercli-com',
+        'subdomain' => 'app-shippercli-com.example.com',
     ]);
 });
 

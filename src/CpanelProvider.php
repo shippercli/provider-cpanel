@@ -1589,10 +1589,19 @@ final class CpanelProvider implements
                 "Delete Shipper-managed cPanel subdomain {$name}",
             );
         } elseif ($type === 'addon') {
+            $primaryDomain = $domain['primary_domain'] ?? null;
+            if (! \is_string($primaryDomain) || $primaryDomain === '') {
+                $domains = $this->required(
+                    $this->api()->uapi('DomainInfo', 'domains_data', ['format' => 'hash']),
+                    'Resolve cPanel primary domain for addon cleanup',
+                );
+                $primaryDomain = $this->primaryDomain($domains);
+            }
+
             $this->required(
                 $this->api()->api2('AddonDomain', 'deladdondomain', [
                     'domain' => $name,
-                    'subdomain' => $this->slug($name),
+                    'subdomain' => $this->slug($name).'.'.$primaryDomain,
                 ]),
                 "Delete Shipper-managed cPanel addon domain {$name}",
             );
