@@ -22,6 +22,8 @@
 | `cpanel.clean` | `true` | Remove managed deploy-path contents except `.well-known` before upload |
 | `cpanel.archive_extraction` | `auto` | `auto`, `direct`, or monitored `cron` extraction |
 | `cpanel.repository_root` | `/.shipper/repositories/<project>/<profile>` | Separate cPanel-managed Git repository path; `.cpanel.yml` deploys from here into `deploy_path` |
+| `cpanel.git_deployment_timeout` | `300` | Maximum seconds to wait for the exact cPanel Git deployment task started by Shipper |
+| `cpanel.git_deployment_interval_ms` | `2000` | Polling interval in milliseconds for the current Git deployment task, capped at 10 seconds |
 | `cpanel.task_timeout` | `360` | Maximum seconds for a monitored account task |
 
 `auto` uses cPanel Git when the project has a repository URL and the account
@@ -30,6 +32,11 @@ supports Git. It falls back to Fileman only when Git is unavailable.
 cPanel Git repositories must not share the domain document root. Keep
 `cpanel.repository_root` separate from `deploy_path`, and commit a `.cpanel.yml`
 file that copies the intended deployment files into the document root.
+
+Private repositories require Git credentials to be configured on the cPanel
+account before deployment. Prefer short-lived credentials or a credential helper,
+and remove temporary credentials after the deployment completes. Shipper never
+embeds repository credentials in `shipper.yml`.
 
 ## Runtime
 

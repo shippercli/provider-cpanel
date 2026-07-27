@@ -73,3 +73,7 @@ The provider can leave beta only when all of the following are true:
 The current test account exposes CloudLinux Node Selector but no EA Node.js
 runtime. Shipper verifies Passenger registration and dependency configuration
 there, while the HTTP runtime assertion remains an explicit host prerequisite.
+
+The private Git sample has also verified repository creation outside the
+document root, exact-task status polling, `.cpanel.yml` deployment, live HTTP
+output, managed-resource destruction, and removal of temporary Git credentials.
