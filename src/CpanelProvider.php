@@ -983,7 +983,7 @@ final class CpanelProvider implements
             throw new RuntimeException('Repository URL is required for cPanel Git deployment');
         }
 
-        $repositoryRoot = $this->absolutePath($this->deployPath($profile));
+        $repositoryRoot = $this->gitRepositoryRoot($project, $profile);
         $repositories = $this->required(
             $this->api()->uapi('VersionControl', 'retrieve'),
             'List cPanel Git repositories',
@@ -1017,6 +1017,19 @@ final class CpanelProvider implements
             'repository_root' => $repositoryRoot,
             'task' => $deployment,
         ];
+    }
+
+    private function gitRepositoryRoot(object $project, object $profile): string
+    {
+        $configured = $this->stringCpanelOption($profile, 'repository_root', '');
+        if ($configured !== '') {
+            return $this->absolutePath($configured);
+        }
+
+        return $this->absolutePath(
+            '/.shipper/repositories/'.$this->slug($this->projectName($project))
+            .'/'.$this->slug($this->profileName($profile)),
+        );
     }
 
     /**

@@ -21,10 +21,15 @@
 | `deployment_method` | `auto` | `auto`, `fileman`, or cPanel-managed `git` |
 | `cpanel.clean` | `true` | Remove managed deploy-path contents except `.well-known` before upload |
 | `cpanel.archive_extraction` | `auto` | `auto`, `direct`, or monitored `cron` extraction |
+| `cpanel.repository_root` | `/.shipper/repositories/<project>/<profile>` | Separate cPanel-managed Git repository path; `.cpanel.yml` deploys from here into `deploy_path` |
 | `cpanel.task_timeout` | `360` | Maximum seconds for a monitored account task |
 
 `auto` uses cPanel Git when the project has a repository URL and the account
 supports Git. It falls back to Fileman only when Git is unavailable.
+
+cPanel Git repositories must not share the domain document root. Keep
+`cpanel.repository_root` separate from `deploy_path`, and commit a `.cpanel.yml`
+file that copies the intended deployment files into the document root.
 
 ## Runtime
 

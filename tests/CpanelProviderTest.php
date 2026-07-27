@@ -345,6 +345,14 @@ test('git deployment creates updates and deploys a cpanel repository', function 
         ->and(cpanelProviderCalls($client, 'upload', 'Fileman', 'upload_files'))->toHaveCount(1)
         ->and($client->uploadedArchiveEntries)->toBe([])
         ->and($client->uploadedFiles)->toHaveKey('.shipper-manifest.json');
+
+    $repositoryRoot = '/home/shipper/.shipper/repositories/sample/production';
+    $create = cpanelProviderCalls($client, 'uapi', 'VersionControl', 'create')[0];
+    $update = cpanelProviderCalls($client, 'uapi', 'VersionControl', 'update')[0];
+    $deploy = cpanelProviderCalls($client, 'uapi', 'VersionControlDeployment', 'create')[0];
+    expect($create['parameters']['repository_root'])->toBe($repositoryRoot)
+        ->and($update['parameters']['repository_root'])->toBe($repositoryRoot)
+        ->and($deploy['parameters']['repository_root'])->toBe($repositoryRoot);
 });
 
 test('missing subdomains are created with the current uapi surface', function (): void {

@@ -24,7 +24,7 @@ Official sources:
 | --- | --- | --- |
 | Capability discovery | Read enabled features and fail with a precise unavailable-feature message | `Features/list_features` |
 | Static and PHP deployment | Upload an archive, extract large archives through a temporary marker-owned cron task, clean managed artifacts, and preserve unrelated files | `Fileman/upload_files`, `Fileman/*`, API 2 `Cron/*` |
-| Git deployment | Create or update a cPanel-managed repository, select the branch, trigger deployment, and report task state | `VersionControl/*`, `VersionControlDeployment/*` |
+| Git deployment | Create or update a cPanel-managed repository outside the document root, select the branch, deploy through `.cpanel.yml`, and report task state | `VersionControl/*`, `VersionControlDeployment/*` |
 | Domain lifecycle | Detect existing domains; create and clean up managed subdomains, addon domains, and aliases; control document roots | `DomainInfo/*`, `SubDomain/*`, API 2 `AddonDomain/*`, API 2 `Park/*` |
 | PHP runtime | Discover installed versions, set the vhost version, and configure supported `php.ini` directives | `LangPHP/*` |
 | Node.js, Python, and Ruby runtime | Register, update, enable, disable, and remove Passenger applications; install declared dependencies | `PassengerApps/*` |
