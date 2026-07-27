@@ -268,16 +268,19 @@ test('node applications are registered with passenger', function (): void {
             'runtime' => [
                 'type' => 'nodejs',
                 'application_root' => 'node-app',
-                'install_dependencies' => false,
+                'install_dependencies' => true,
             ],
         ]),
     ))->toBeTrue()
         ->and(cpanelProviderCalls($client, 'uapi', 'PassengerApps', 'register_application'))->toHaveCount(1)
-        ->and(cpanelProviderCalls($client, 'uapi', 'PassengerApps', 'ensure_deps'))->toHaveCount(0);
+        ->and(cpanelProviderCalls($client, 'uapi', 'PassengerApps', 'ensure_deps'))->toHaveCount(1);
 
     $registration = cpanelProviderCalls($client, 'uapi', 'PassengerApps', 'register_application')[0];
+    $dependencies = cpanelProviderCalls($client, 'uapi', 'PassengerApps', 'ensure_deps')[0];
     expect($registration['parameters']['path'])->toBe('/node-app')
         ->and($registration['parameters']['domain'])->toBe('app.example.com')
+        ->and($dependencies['parameters']['app_path'])->toBe('/node-app')
+        ->and($dependencies['parameters']['type'])->toBe('npm')
         ->and($client->uploadedPaths)->toHaveKey('node-app/tmp/restart.txt');
 });
 

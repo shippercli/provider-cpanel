@@ -652,7 +652,7 @@ final class CpanelProvider implements DeploymentProviderInterface
                 'ruby' => 'gem',
             };
             $this->required($this->api()->uapi('PassengerApps', 'ensure_deps', [
-                'app_path' => $absolutePath,
+                'app_path' => $registrationPath,
                 'type' => $dependencyType,
             ]), 'Install cPanel Passenger application dependencies');
         }
