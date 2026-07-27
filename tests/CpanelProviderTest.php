@@ -143,10 +143,10 @@ test('fileman apply uploads and extracts an authenticated archive', function ():
     ]);
 
     expect($provider->apply($project, $profile))->toBeTrue()
-        ->and(cpanelProviderCalls($client, 'upload', 'Fileman', 'upload_files'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'upload', 'Fileman', 'upload_files'))->toHaveCount(2)
         ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toHaveCount(2)
-        ->and(cpanelProviderCalls($client, 'uapi', 'Fileman', 'save_file_content'))->toHaveCount(1)
-        ->and($client->uploadedArchiveEntries)->toContain('index.html');
+        ->and($client->uploadedArchiveEntries)->toContain('index.html')
+        ->and($client->uploadedFiles)->toHaveKey('.shipper-manifest.json');
 
     $fileOperations = cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop');
     expect($fileOperations[0]['parameters']['op'])->toBe('extract')
@@ -246,7 +246,12 @@ test('php mysql cron redirect ssl and alias lifecycle is applied through cpanel 
         ->and(cpanelProviderCalls($client, 'api2', 'Park', 'park'))->toHaveCount(1);
 
     $databaseCall = cpanelProviderCalls($client, 'uapi', 'Mysql', 'create_database')[0];
-    expect($databaseCall['parameters']['name'])->toBe('shipper_app');
+    expect($databaseCall['parameters']['name'])->toBe('shipper_app')
+        ->and($client->uploadedFiles['.env'])->toContain(
+            'APP_ENV="production"',
+            'DB_CONNECTION="mysql"',
+            'DB_DATABASE="shipper_app"',
+        );
 });
 
 test('node applications are registered with passenger', function (): void {
@@ -299,7 +304,9 @@ test('git deployment creates updates and deploys a cpanel repository', function 
         ->and(cpanelProviderCalls($client, 'uapi', 'VersionControl', 'create'))->toHaveCount(1)
         ->and(cpanelProviderCalls($client, 'uapi', 'VersionControl', 'update'))->toHaveCount(1)
         ->and(cpanelProviderCalls($client, 'uapi', 'VersionControlDeployment', 'create'))->toHaveCount(1)
-        ->and(cpanelProviderCalls($client, 'upload', 'Fileman', 'upload_files'))->toHaveCount(0);
+        ->and(cpanelProviderCalls($client, 'upload', 'Fileman', 'upload_files'))->toHaveCount(1)
+        ->and($client->uploadedArchiveEntries)->toBe([])
+        ->and($client->uploadedFiles)->toHaveKey('.shipper-manifest.json');
 });
 
 test('missing subdomains are created with the current uapi surface', function (): void {

@@ -18,6 +18,9 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
     /** @var array<int, string> */
     public array $uploadedArchiveEntries = [];
 
+    /** @var array<string, string> */
+    public array $uploadedFiles = [];
+
     public function uapi(string $module, string $function, array $parameters = [], string $method = 'GET'): array
     {
         $this->calls[] = compact('module', 'function', 'parameters', 'method') + ['surface' => 'uapi'];
@@ -42,15 +45,22 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
 
     public function uploadFile(string $directory, string $localPath, string $remoteFilename, bool $overwrite = true): array
     {
-        $archive = new ZipArchive;
-        if ($archive->open($localPath) === true) {
-            for ($index = 0; $index < $archive->numFiles; $index++) {
-                $entry = $archive->getNameIndex($index);
-                if (\is_string($entry)) {
-                    $this->uploadedArchiveEntries[] = $entry;
+        $contents = \file_get_contents($localPath);
+        if (\is_string($contents)) {
+            $this->uploadedFiles[$remoteFilename] = $contents;
+        }
+
+        if (\str_ends_with($remoteFilename, '.zip')) {
+            $archive = new ZipArchive;
+            if ($archive->open($localPath) === true) {
+                for ($index = 0; $index < $archive->numFiles; $index++) {
+                    $entry = $archive->getNameIndex($index);
+                    if (\is_string($entry)) {
+                        $this->uploadedArchiveEntries[] = $entry;
+                    }
                 }
+                $archive->close();
             }
-            $archive->close();
         }
 
         $this->calls[] = [

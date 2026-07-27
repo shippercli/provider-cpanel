@@ -697,13 +697,12 @@ final class CpanelProvider implements DeploymentProviderInterface
             $lines[] = $name.'='.\json_encode($value, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
         }
 
-        $this->required($this->api()->uapi('Fileman', 'save_file_content', [
-            'dir' => $directory,
-            'file' => $this->stringCpanelOption($profile, 'environment_filename', '.env'),
-            'content' => \implode("\n", $lines)."\n",
-            'from_charset' => 'utf-8',
-            'to_charset' => 'utf-8',
-        ], 'POST'), 'Write cPanel environment file');
+        $this->uploadContent(
+            $directory,
+            $this->stringCpanelOption($profile, 'environment_filename', '.env'),
+            \implode("\n", $lines)."\n",
+            'Write cPanel environment file',
+        );
     }
 
     /**
@@ -877,13 +876,33 @@ final class CpanelProvider implements DeploymentProviderInterface
      */
     private function writeManifest(object $profile, array $manifest): void
     {
-        $this->required($this->api()->uapi('Fileman', 'save_file_content', [
-            'dir' => $this->deployPath($profile),
-            'file' => self::MANIFEST_FILENAME,
-            'content' => \json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
-            'from_charset' => 'utf-8',
-            'to_charset' => 'utf-8',
-        ], 'POST'), 'Write cPanel deployment manifest');
+        $this->uploadContent(
+            $this->deployPath($profile),
+            self::MANIFEST_FILENAME,
+            \json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
+            'Write cPanel deployment manifest',
+        );
+    }
+
+    private function uploadContent(
+        string $directory,
+        string $filename,
+        string $contents,
+        string $operation,
+    ): void {
+        $temporaryPath = \tempnam(\sys_get_temp_dir(), 'shipper-cpanel-content-');
+        if ($temporaryPath === false || \file_put_contents($temporaryPath, $contents) === false) {
+            throw new RuntimeException("Unable to create temporary file for {$filename}");
+        }
+
+        try {
+            $this->required(
+                $this->api()->uploadFile($directory, $temporaryPath, $filename, true),
+                $operation,
+            );
+        } finally {
+            @\unlink($temporaryPath);
+        }
     }
 
     /**
