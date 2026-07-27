@@ -21,6 +21,9 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
     /** @var array<string, string> */
     public array $uploadedFiles = [];
 
+    /** @var array<string, string> */
+    public array $uploadedPaths = [];
+
     public function uapi(string $module, string $function, array $parameters = [], string $method = 'GET'): array
     {
         $this->calls[] = compact('module', 'function', 'parameters', 'method') + ['surface' => 'uapi'];
@@ -48,6 +51,7 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
         $contents = \file_get_contents($localPath);
         if (\is_string($contents)) {
             $this->uploadedFiles[$remoteFilename] = $contents;
+            $this->uploadedPaths[\trim($directory, '/').'/'.$remoteFilename] = $contents;
         }
 
         if (\str_ends_with($remoteFilename, '.zip')) {

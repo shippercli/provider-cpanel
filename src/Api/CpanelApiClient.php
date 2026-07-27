@@ -344,6 +344,12 @@ final class CpanelApiClient implements CpanelApiClientInterface
                         $success = false;
                         break;
                     }
+
+                    $output = \is_array($item) ? $this->firstString($item['output'] ?? null) : null;
+                    if ($output !== null && \preg_match('/(?:^|\R)\s*(?:error:|.*\bpermission denied\b)/i', $output) === 1) {
+                        $success = false;
+                        break;
+                    }
                 }
             }
 
@@ -390,7 +396,7 @@ final class CpanelApiClient implements CpanelApiClientInterface
             }
         }
 
-        $dataMessage = $this->findValueByKeys($result['data'] ?? null, ['reason', 'error', 'statusmsg']);
+        $dataMessage = $this->findValueByKeys($result['data'] ?? null, ['reason', 'error', 'statusmsg', 'output']);
 
         return $dataMessage ?? 'OK';
     }

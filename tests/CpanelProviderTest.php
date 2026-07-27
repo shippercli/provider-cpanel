@@ -130,7 +130,7 @@ test('validation rejects missing database password', function (): void {
     expect($errors)->toContain('Database password is required for cPanel database user: app');
 });
 
-test('fileman apply uploads and extracts an authenticated archive', function (): void {
+test('fileman apply creates directories and uploads mapped files', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [
         'deployment_method' => 'fileman',
@@ -144,16 +144,9 @@ test('fileman apply uploads and extracts an authenticated archive', function ():
 
     expect($provider->apply($project, $profile))->toBeTrue()
         ->and(cpanelProviderCalls($client, 'upload', 'Fileman', 'upload_files'))->toHaveCount(2)
-        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toHaveCount(2)
-        ->and($client->uploadedArchiveEntries)->toContain('index.html')
+        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toHaveCount(0)
+        ->and($client->uploadedPaths)->toHaveKey('app/index.html')
         ->and($client->uploadedFiles)->toHaveKey('.shipper-manifest.json');
-
-    $uploads = cpanelProviderCalls($client, 'upload', 'Fileman', 'upload_files');
-    $fileOperations = cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop');
-    expect($uploads[0]['parameters']['directory'])->toBe('app')
-        ->and($uploads[1]['parameters']['directory'])->toBe('app')
-        ->and($fileOperations[0]['parameters']['op'])->toBe('extract')
-        ->and($fileOperations[1]['parameters']['op'])->toBe('trash');
 });
 
 test('public web directory archives keep the application and publish its web root', function (): void {
@@ -176,13 +169,13 @@ test('public web directory archives keep the application and publish its web roo
         'deploy_path' => '/laravel',
         'runtime' => ['type' => 'php', 'version' => '8.4'],
     ])))->toBeTrue()
-        ->and($client->uploadedArchiveEntries)->toContain(
-            'app/composer.json',
-            'app/bootstrap/app.php',
-            'app/public/index.php',
-            'index.php',
-            'app.css',
-        );
+        ->and($client->uploadedPaths)->toHaveKeys([
+            'laravel/app/composer.json',
+            'laravel/app/bootstrap/app.php',
+            'laravel/app/public/index.php',
+            'laravel/index.php',
+            'laravel/app.css',
+        ]);
 });
 
 test('php mysql cron redirect ssl and alias lifecycle is applied through cpanel APIs', function (): void {

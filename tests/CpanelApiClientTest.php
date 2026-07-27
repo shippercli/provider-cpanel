@@ -81,6 +81,34 @@ test('normalizes API 2 and WHM responses', function (): void {
         ->and($history[1]['request']->getHeaderLine('Authorization'))->toBe('whm root:whm-token');
 });
 
+test('rejects API 2 file operations that report errors in successful output', function (): void {
+    $history = [];
+    $client = cpanelTestClient([
+        new Response(200, [], \json_encode([
+            'cpanelresult' => [
+                'event' => ['result' => 1],
+                'data' => [[
+                    'result' => 1,
+                    'output' => "Archive: release.zip\nerror: cannot create index.html\nPermission denied\n",
+                ]],
+            ],
+        ], JSON_THROW_ON_ERROR)),
+    ], $history);
+    $api = new CpanelApiClient([
+        'host' => 'cpanel.example.com',
+        'username' => 'shipper',
+        'password' => 'secret',
+    ], $client);
+
+    $result = $api->api2('Fileman', 'fileop', [
+        'op' => 'extract',
+        'sourcefiles' => 'app/release.zip',
+    ]);
+
+    expect($result['success'])->toBeFalse()
+        ->and($result['message'])->toContain('Permission denied');
+});
+
 test('encodes repeated UAPI parameters without bracket syntax', function (): void {
     $history = [];
     $client = cpanelTestClient([

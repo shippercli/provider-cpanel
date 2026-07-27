@@ -535,30 +535,16 @@ final class CpanelProvider implements DeploymentProviderInterface
     {
         $deployPath = $this->deployPath($profile);
         $archivePath = $this->buildArchive($project);
-        $archiveName = '.shipper-deploy-'.\bin2hex(\random_bytes(6)).'.zip';
+        $deployDirectory = $this->relativeHomePath($deployPath);
 
         try {
+            $this->ensureRemoteDirectory($deployDirectory);
+
             if ($this->boolCpanelOption($profile, 'clean', true)) {
-                $this->cleanManagedDirectory($this->relativeHomePath($deployPath));
+                $this->cleanManagedDirectory($deployDirectory);
             }
 
-            $this->required(
-                $this->api()->uploadFile($this->relativeHomePath($deployPath), $archivePath, $archiveName, true),
-                'Upload cPanel deployment archive',
-            );
-
-            $remoteArchive = $this->relativeHomePath($deployPath.'/'.$archiveName);
-            $this->required($this->api()->api2('Fileman', 'fileop', [
-                'op' => 'extract',
-                'sourcefiles' => $remoteArchive,
-                'doubledecode' => 1,
-            ]), 'Extract cPanel deployment archive');
-
-            $this->required($this->api()->api2('Fileman', 'fileop', [
-                'op' => 'trash',
-                'sourcefiles' => $remoteArchive,
-                'doubledecode' => 1,
-            ]), 'Remove cPanel deployment archive');
+            $this->uploadArchiveContents($archivePath, $deployDirectory);
 
             return [
                 'method' => 'fileman',
@@ -1131,6 +1117,160 @@ final class CpanelProvider implements DeploymentProviderInterface
             'sourcefiles' => \implode(',', $managed),
             'doubledecode' => 1,
         ]), "Clean cPanel deployment directory {$directory}");
+    }
+
+    private function ensureRemoteDirectory(string $directory): void
+    {
+        $relative = \trim($this->relativeHomePath($directory), '/');
+        if ($relative === '') {
+            return;
+        }
+
+        $current = $this->resolveHomeDirectory();
+        foreach (\explode('/', $relative) as $segment) {
+            if ($segment === '') {
+                continue;
+            }
+
+            $candidate = $current.'/'.$segment;
+            if ($this->remoteDirectoryExists($candidate)) {
+                $current = $candidate;
+
+                continue;
+            }
+
+            $result = $this->api()->api2('Fileman', 'mkdir', [
+                'path' => $current,
+                'name' => $segment,
+                'permissions' => '0755',
+            ]);
+            if (! $result['success'] && ! $this->remoteDirectoryExists($candidate)) {
+                $this->required($result, "Create cPanel deployment directory {$candidate}");
+            }
+
+            $current = $candidate;
+        }
+    }
+
+    private function remoteDirectoryExists(string $absolutePath): bool
+    {
+        $result = $this->api()->uapi('Fileman', 'get_file_information', [
+            'path' => $absolutePath,
+        ]);
+        if (! $result['success']) {
+            return false;
+        }
+
+        $type = $this->findValueAtKey($result['data'], 'type');
+        $exists = $this->findValueAtKey($result['data'], 'exists');
+
+        return \is_string($type)
+            && \strtolower($type) === 'dir'
+            && ($exists === null || (int) $exists === 1);
+    }
+
+    private function uploadArchiveContents(string $archivePath, string $deployDirectory): void
+    {
+        $zip = new ZipArchive;
+        if ($zip->open($archivePath) !== true) {
+            throw new RuntimeException("Unable to open deployment archive: {$archivePath}");
+        }
+
+        try {
+            $files = [];
+            $directories = [];
+            for ($index = 0; $index < $zip->numFiles; $index++) {
+                $rawEntry = $zip->getNameIndex($index);
+                if (! \is_string($rawEntry)) {
+                    continue;
+                }
+
+                $directoryEntry = \str_ends_with($rawEntry, '/');
+                $entry = $this->normalizeArchiveEntry($rawEntry);
+                if ($entry === '') {
+                    continue;
+                }
+
+                if ($directoryEntry) {
+                    $directories[$entry] = true;
+                } else {
+                    $files[] = $entry;
+                }
+
+                $parent = $directoryEntry ? $entry : \dirname($entry);
+                while ($parent !== '.' && $parent !== '') {
+                    $directories[$parent] = true;
+                    $parent = \dirname($parent);
+                }
+            }
+
+            \uksort($directories, static function (string $left, string $right): int {
+                $depth = \substr_count($left, '/') <=> \substr_count($right, '/');
+
+                return $depth !== 0 ? $depth : $left <=> $right;
+            });
+
+            foreach (\array_keys($directories) as $directory) {
+                $this->ensureRemoteDirectory($deployDirectory.'/'.$directory);
+            }
+
+            foreach ($files as $entry) {
+                $stream = $zip->getStream($entry);
+                if ($stream === false) {
+                    throw new RuntimeException("Unable to read deployment archive entry: {$entry}");
+                }
+
+                $temporaryPath = \tempnam(\sys_get_temp_dir(), 'shipper-cpanel-file-');
+                if ($temporaryPath === false) {
+                    \fclose($stream);
+
+                    throw new RuntimeException("Unable to create temporary file for archive entry: {$entry}");
+                }
+
+                $output = @\fopen($temporaryPath, 'wb');
+                if ($output === false) {
+                    \fclose($stream);
+                    @\unlink($temporaryPath);
+
+                    throw new RuntimeException("Unable to write temporary file for archive entry: {$entry}");
+                }
+
+                try {
+                    if (\stream_copy_to_stream($stream, $output) === false) {
+                        throw new RuntimeException("Unable to extract deployment archive entry: {$entry}");
+                    }
+                } finally {
+                    \fclose($stream);
+                    \fclose($output);
+                }
+
+                $parent = \dirname($entry);
+                $remoteDirectory = $parent === '.'
+                    ? $deployDirectory
+                    : $deployDirectory.'/'.$parent;
+
+                try {
+                    $this->required(
+                        $this->api()->uploadFile($remoteDirectory, $temporaryPath, \basename($entry), true),
+                        "Upload cPanel deployment file {$entry}",
+                    );
+                } finally {
+                    @\unlink($temporaryPath);
+                }
+            }
+        } finally {
+            $zip->close();
+        }
+    }
+
+    private function normalizeArchiveEntry(string $entry): string
+    {
+        $entry = \str_replace('\\', '/', $entry);
+        if (\str_starts_with($entry, '/') || \preg_match('#(^|/)\.\.(/|$)#', $entry) === 1) {
+            throw new RuntimeException("Unsafe deployment archive entry: {$entry}");
+        }
+
+        return \trim($entry, '/');
     }
 
     private function buildArchive(object $project): string
