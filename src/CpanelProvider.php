@@ -997,7 +997,7 @@ final class CpanelProvider implements
         $exists = $this->containsValueAtKey($repositories, 'repository_root', $repositoryRoot);
 
         if (! $exists) {
-            $this->required($this->api()->uapi('VersionControl', 'create', [
+            $creation = $this->required($this->api()->uapi('VersionControl', 'create', [
                 'type' => 'git',
                 'name' => $this->projectName($project),
                 'repository_root' => $repositoryRoot,
@@ -1006,7 +1006,11 @@ final class CpanelProvider implements
                     'url' => $repositoryUrl,
                 ],
             ]), 'Create cPanel Git repository');
-            $this->waitForGitRepository($repositoryRoot, $profile);
+            $this->waitForGitRepository(
+                $repositoryRoot,
+                $profile,
+                \is_array($creation) ? $creation : [],
+            );
         }
 
         $this->required($this->api()->uapi('VersionControl', 'update', [
@@ -1029,7 +1033,10 @@ final class CpanelProvider implements
         ];
     }
 
-    private function waitForGitRepository(string $repositoryRoot, object $profile): void
+    /**
+     * @param array<string, mixed> $creation
+     */
+    private function waitForGitRepository(string $repositoryRoot, object $profile, array $creation): void
     {
         $timeout = \max(1, $this->intCpanelOption($profile, 'git_repository_timeout', 120));
         $interval = \max(
@@ -1037,6 +1044,7 @@ final class CpanelProvider implements
             \min(10_000, $this->intCpanelOption($profile, 'git_repository_interval_ms', 2000)),
         );
         $deadline = \microtime(true) + $timeout;
+        $logPath = $this->gitCreationLogPath($creation);
 
         while (true) {
             $repositories = $this->required(
@@ -1045,6 +1053,11 @@ final class CpanelProvider implements
             );
             if ($this->containsValueAtKey($repositories, 'repository_root', $repositoryRoot)) {
                 return;
+            }
+
+            $failure = $this->gitCreationFailure($logPath);
+            if ($failure !== null) {
+                throw new RuntimeException("cPanel Git repository creation failed: {$failure}");
             }
 
             if (\microtime(true) >= $deadline) {
@@ -1057,6 +1070,73 @@ final class CpanelProvider implements
                 \usleep($interval * 1000);
             }
         }
+    }
+
+    /**
+     * @param array<string, mixed> $creation
+     */
+    private function gitCreationLogPath(array $creation): ?string
+    {
+        $tasks = $creation['tasks'] ?? null;
+        if (! \is_array($tasks)) {
+            return null;
+        }
+
+        foreach ($tasks as $task) {
+            if (! \is_array($task) || ! \is_array($task['args'] ?? null)) {
+                continue;
+            }
+
+            $path = $task['args']['log_file'] ?? null;
+            if (\is_string($path) && $path !== '') {
+                return $path;
+            }
+        }
+
+        return null;
+    }
+
+    private function gitCreationFailure(?string $logPath): ?string
+    {
+        if ($logPath === null) {
+            return null;
+        }
+
+        $response = $this->api()->uapi('Fileman', 'get_file_content', [
+            'dir' => \dirname($logPath),
+            'file' => \basename($logPath),
+            'from_charset' => 'UTF-8',
+            'to_charset' => 'UTF-8',
+        ]);
+        if (! $response['success'] || ! \is_array($response['data'])) {
+            return null;
+        }
+
+        $content = $response['data']['content'] ?? null;
+        if (! \is_string($content) || $content === '') {
+            return null;
+        }
+
+        $lines = \preg_split('/\R/', $content) ?: [];
+        foreach (\array_reverse($lines) as $line) {
+            $line = \trim($line);
+            if ($line !== '' && \preg_match('/\b(?:fatal|error|failed|could not|unable to)\b/i', $line) === 1) {
+                return $this->sanitizeGitLogLine($line);
+            }
+        }
+
+        return null;
+    }
+
+    private function sanitizeGitLogLine(string $line): string
+    {
+        $line = \preg_replace(
+            '#(https?://)(?:[^/@\s:]+(?::[^/@\s]*)?@)#i',
+            '$1***@',
+            $line,
+        ) ?? $line;
+
+        return \substr($line, 0, 500);
     }
 
     /**
