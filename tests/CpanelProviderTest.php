@@ -365,6 +365,49 @@ test('git deployment creates updates and deploys a cpanel repository', function 
         ->and($deploy['parameters']['repository_root'])->toBe($repositoryRoot);
 });
 
+test('git deployment reports a redacted cpanel clone failure', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, [
+        'deployment_method' => 'git',
+    ]);
+    $repositoryRoot = '/home/shipper/.shipper/repositories/sample/production';
+    $logPath = '/home/shipper/.cpanel/logs/vc_git_create.log';
+    $client->responseQueues['uapi:VersionControl:retrieve'] = [
+        $client->success([]),
+        $client->success([]),
+    ];
+    $client->responses['uapi:VersionControl:create'] = $client->success([
+        'repository_root' => $repositoryRoot,
+        'tasks' => [
+            ['args' => ['log_file' => $logPath]],
+        ],
+    ]);
+    $client->responseQueues['uapi:Fileman:get_file_content'] = [
+        $client->success(),
+        $client->success([
+            'content' => "Cloning...\nfatal: unable to access 'https://token@github.com/shippercli/sample.git': Could not resolve host: github.com\n",
+        ]),
+    ];
+
+    expect($provider->apply(
+        new CpanelTestProject('.', [
+            'url' => 'https://github.com/shippercli/sample.git',
+        ]),
+        new CpanelTestProfile([
+            'domain' => 'app.example.com',
+            'deploy_path' => '/git-app',
+            'runtime' => ['type' => 'static'],
+            'cpanel' => [
+                'git_repository_timeout' => 1,
+                'git_repository_interval_ms' => 0,
+            ],
+        ]),
+    ))->toBeFalse()
+        ->and($provider->getLastError())
+        ->toBe("cPanel Git repository creation failed: fatal: unable to access 'https://***@github.com/shippercli/sample.git': Could not resolve host: github.com")
+        ->and(cpanelProviderCalls($client, 'uapi', 'Fileman', 'get_file_content'))->toHaveCount(2);
+});
+
 test('git deployment waits for the current task instead of a historical success', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [
