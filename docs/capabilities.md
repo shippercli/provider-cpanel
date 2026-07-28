@@ -49,9 +49,9 @@ Generic calls do not bypass cPanel authorization. A call remains unavailable
 when the authenticated account, hosting package, server profile, or installed
 plugin does not expose the requested operation.
 
-## Stable release gate
+## Stable release verification
 
-The provider can leave beta only when all of the following are true:
+Version 1.0 is released only after all of the following have been verified:
 
 1. The provider is executable from `shippercli/provider-cpanel`; no cPanel
    implementation is required from the CLI repository.

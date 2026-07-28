@@ -7,17 +7,11 @@
         "php": "^8.3",
         "composer-runtime-api": "^2.1",
         "guzzlehttp/guzzle": "^7.9",
-        "shippercli/contracts": "dev-main"
+        "shippercli/contracts": "^1.0"
     },
     "require-dev": {
         "pestphp/pest": "^3.8"
     },
-    "repositories": [
-        {
-            "type": "vcs",
-            "url": "https://github.com/shippercli/contracts"
-        }
-    ],
     "autoload": {
         "psr-4": {
             "ShipperCli\\ProviderCpanel\\": "src/"
