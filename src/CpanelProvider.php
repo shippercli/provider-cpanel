@@ -1006,6 +1006,7 @@ final class CpanelProvider implements
                     'url' => $repositoryUrl,
                 ],
             ]), 'Create cPanel Git repository');
+            $this->waitForGitRepository($repositoryRoot, $profile);
         }
 
         $this->required($this->api()->uapi('VersionControl', 'update', [
@@ -1026,6 +1027,36 @@ final class CpanelProvider implements
             'repository_root' => $repositoryRoot,
             'task' => $deployment,
         ];
+    }
+
+    private function waitForGitRepository(string $repositoryRoot, object $profile): void
+    {
+        $timeout = \max(1, $this->intCpanelOption($profile, 'git_repository_timeout', 120));
+        $interval = \max(
+            0,
+            \min(10_000, $this->intCpanelOption($profile, 'git_repository_interval_ms', 2000)),
+        );
+        $deadline = \microtime(true) + $timeout;
+
+        while (true) {
+            $repositories = $this->required(
+                $this->api()->uapi('VersionControl', 'retrieve'),
+                'Wait for cPanel Git repository',
+            );
+            if ($this->containsValueAtKey($repositories, 'repository_root', $repositoryRoot)) {
+                return;
+            }
+
+            if (\microtime(true) >= $deadline) {
+                throw new RuntimeException(
+                    "cPanel Git repository {$repositoryRoot} was not ready within {$timeout} seconds",
+                );
+            }
+
+            if ($interval > 0) {
+                \usleep($interval * 1000);
+            }
+        }
     }
 
     /**

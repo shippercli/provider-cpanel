@@ -327,7 +327,12 @@ test('git deployment creates updates and deploys a cpanel repository', function 
     $provider = cpanelProviderWithExistingDomain($client, [
         'deployment_method' => 'git',
     ]);
-    $client->responses['uapi:VersionControl:retrieve'] = $client->success([]);
+    $repositoryRoot = '/home/shipper/.shipper/repositories/sample/production';
+    $client->responseQueues['uapi:VersionControl:retrieve'] = [
+        $client->success([]),
+        $client->success([]),
+        $client->success([['repository_root' => $repositoryRoot]]),
+    ];
 
     expect($provider->apply(
         new CpanelTestProject('.', [
@@ -337,8 +342,13 @@ test('git deployment creates updates and deploys a cpanel repository', function 
             'domain' => 'app.example.com',
             'deploy_path' => '/git-app',
             'runtime' => ['type' => 'static'],
+            'cpanel' => [
+                'git_repository_timeout' => 1,
+                'git_repository_interval_ms' => 0,
+            ],
         ]),
     ))->toBeTrue()
+        ->and(cpanelProviderCalls($client, 'uapi', 'VersionControl', 'retrieve'))->toHaveCount(3)
         ->and(cpanelProviderCalls($client, 'uapi', 'VersionControl', 'create'))->toHaveCount(1)
         ->and(cpanelProviderCalls($client, 'uapi', 'VersionControl', 'update'))->toHaveCount(1)
         ->and(cpanelProviderCalls($client, 'uapi', 'VersionControlDeployment', 'create'))->toHaveCount(1)
@@ -347,7 +357,6 @@ test('git deployment creates updates and deploys a cpanel repository', function 
         ->and($client->uploadedArchiveEntries)->toBe([])
         ->and($client->uploadedFiles)->toHaveKey('.shipper-manifest.json');
 
-    $repositoryRoot = '/home/shipper/.shipper/repositories/sample/production';
     $create = cpanelProviderCalls($client, 'uapi', 'VersionControl', 'create')[0];
     $update = cpanelProviderCalls($client, 'uapi', 'VersionControl', 'update')[0];
     $deploy = cpanelProviderCalls($client, 'uapi', 'VersionControlDeployment', 'create')[0];
@@ -374,7 +383,10 @@ test('git deployment waits for the current task instead of a historical success'
         'repository_root' => $repositoryRoot,
         'timestamps' => ['queued' => 3],
     ];
-    $client->responses['uapi:VersionControl:retrieve'] = $client->success([]);
+    $client->responseQueues['uapi:VersionControl:retrieve'] = [
+        $client->success([]),
+        $client->success([['repository_root' => $repositoryRoot]]),
+    ];
     $client->responses['uapi:VersionControlDeployment:create'] = $client->success($currentTask);
     $client->responseQueues['uapi:VersionControlDeployment:retrieve'] = [
         $client->success([$oldTask]),
@@ -394,6 +406,8 @@ test('git deployment waits for the current task instead of a historical success'
             'deploy_path' => '/git-app',
             'runtime' => ['type' => 'static'],
             'cpanel' => [
+                'git_repository_timeout' => 1,
+                'git_repository_interval_ms' => 0,
                 'git_deployment_timeout' => 1,
                 'git_deployment_interval_ms' => 0,
             ],
@@ -756,7 +770,8 @@ test('repeated apply preserves ownership needed for safe destroy', function (): 
     ];
     $client->responseQueues['uapi:VersionControl:retrieve'] = [
         $client->success([]),
-        $client->success([['repository_root' => '/home/shipper/app']]),
+        $client->success([['repository_root' => '/home/shipper/.shipper/repositories/sample/production']]),
+        $client->success([['repository_root' => '/home/shipper/.shipper/repositories/sample/production']]),
     ];
     $client->responseQueues['uapi:PassengerApps:list_applications'] = [
         $client->success([]),
@@ -796,7 +811,11 @@ test('repeated apply preserves ownership needed for safe destroy', function (): 
                 'password' => 'database-secret',
             ],
         ],
-        'cpanel' => ['domain_type' => 'addon'],
+        'cpanel' => [
+            'domain_type' => 'addon',
+            'git_repository_timeout' => 1,
+            'git_repository_interval_ms' => 0,
+        ],
     ]);
 
     expect($provider->apply($project, $profile))->toBeTrue();
