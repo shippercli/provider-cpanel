@@ -112,6 +112,35 @@ final class CpanelProvider implements
             }
         }
 
+        $accountResources = $this->accountResourceConfigs($project, $profile);
+        foreach ($accountResources['dns_records'] as $record) {
+            if ($record['zone'] === '' || $record['name'] === '' || $record['type'] === '' || $record['data'] === []) {
+                $errors[] = 'cPanel DNS records require zone, name, type, and data';
+            }
+        }
+        foreach ($accountResources['email_accounts'] as $account) {
+            if (\filter_var($account['address'], FILTER_VALIDATE_EMAIL) === false) {
+                $errors[] = "Invalid cPanel email account address: {$account['address']}";
+            }
+            if ($account['create'] && $account['password'] === '' && $account['password_hash'] === '') {
+                $errors[] = "Password or password_hash is required for cPanel email account: {$account['address']}";
+            }
+        }
+        foreach ($accountResources['email_forwarders'] as $forwarder) {
+            if (\filter_var($forwarder['address'], FILTER_VALIDATE_EMAIL) === false
+                || \filter_var($forwarder['forward_to'], FILTER_VALIDATE_EMAIL) === false) {
+                $errors[] = "Invalid cPanel email forwarder: {$forwarder['address']}";
+            }
+        }
+        foreach ($accountResources['ftp_accounts'] as $account) {
+            if ($account['user'] === '' || $account['domain'] === '') {
+                $errors[] = 'cPanel FTP accounts require user and domain';
+            }
+            if ($account['create'] && $account['password'] === '' && $account['password_hash'] === '') {
+                $errors[] = "Password or password_hash is required for cPanel FTP account: {$account['user']}";
+            }
+        }
+
         return $errors;
     }
 
@@ -120,6 +149,7 @@ final class CpanelProvider implements
         $domain = $this->domain($profile);
         $method = $this->deploymentMethod($project, $profile);
         $runtime = $this->runtimeConfig($project, $profile);
+        $accountResources = $this->accountResourceConfigs($project, $profile);
         $actions = [
             'Discover enabled cPanel account features',
             "Create or find domain: {$domain}",
@@ -170,6 +200,18 @@ final class CpanelProvider implements
             $actions[] = 'Configure SSL and HTTPS redirect';
         }
 
+        foreach ([
+            'dns_records' => 'DNS records',
+            'email_accounts' => 'email accounts',
+            'email_forwarders' => 'email forwarders',
+            'ftp_accounts' => 'FTP accounts',
+        ] as $key => $label) {
+            $count = \count($accountResources[$key]);
+            if ($count > 0) {
+                $actions[] = "Reconcile {$count} Shipper-managed cPanel {$label}";
+            }
+        }
+
         foreach (['before_apply', 'after_apply'] as $phase) {
             $count = \count($this->customOperations($profile, $phase));
             if ($count > 0) {
@@ -189,6 +231,10 @@ final class CpanelProvider implements
             'runtime' => $runtime,
             'database_count' => \count($this->databaseConfigs($project, $profile)),
             'cron_count' => \count($cron),
+            'dns_record_count' => \count($accountResources['dns_records']),
+            'email_account_count' => \count($accountResources['email_accounts']),
+            'email_forwarder_count' => \count($accountResources['email_forwarders']),
+            'ftp_account_count' => \count($accountResources['ftp_accounts']),
             'actions' => $actions,
             'note' => 'Operations are authorized and feature-gated by the target cPanel account.',
         ];
@@ -269,6 +315,10 @@ final class CpanelProvider implements
                 ['domain'],
                 ['created'],
             );
+            $accountResourceState = (new CpanelAccountResourceManager($this->api()))->reconcile(
+                $this->accountResourceConfigs($project, $profile),
+                $previousManifest ?? [],
+            );
 
             $manifest = [
                 'version' => 1,
@@ -287,6 +337,10 @@ final class CpanelProvider implements
                 'cron' => $cronState,
                 'redirects' => $redirectState,
                 'ssl' => $sslState,
+                'dns_records' => $accountResourceState['dns_records'],
+                'email_accounts' => $accountResourceState['email_accounts'],
+                'email_forwarders' => $accountResourceState['email_forwarders'],
+                'ftp_accounts' => $accountResourceState['ftp_accounts'],
                 'features' => $features,
                 'applied_at' => \gmdate(DATE_ATOM),
             ];
@@ -327,6 +381,7 @@ final class CpanelProvider implements
             $this->runCustomOperations($profile, 'before_destroy', $context);
             $this->destroyCron($manifest);
             $this->destroyPassenger($manifest);
+            (new CpanelAccountResourceManager($this->api()))->destroy($manifest);
             $this->destroyDatabases($manifest);
             $this->destroyGitRepository($manifest);
             $this->destroyAliases($manifest);
@@ -388,6 +443,12 @@ final class CpanelProvider implements
             'deployment_status' => $deploymentStatus,
             'domain_status' => $this->optionalApiResult($domainResult),
             'resource_usage' => $this->optionalApiResult($resourceResult),
+            'account_resources' => $manifestMatches ? [
+                'dns_records' => $manifest['dns_records'] ?? [],
+                'email_accounts' => $manifest['email_accounts'] ?? [],
+                'email_forwarders' => $manifest['email_forwarders'] ?? [],
+                'ftp_accounts' => $manifest['ftp_accounts'] ?? [],
+            ] : null,
             'releases' => $this->availableReleases($project, $profile),
         ];
     }
@@ -2474,6 +2535,136 @@ final class CpanelProvider implements
         }
 
         return $result;
+    }
+
+    /**
+     * @return array{
+     *     dns_records: array<int, array{zone: string, name: string, type: string, data: array<int, string>, ttl: int}>,
+     *     email_accounts: array<int, array{address: string, password: string, password_hash: string, quota: int|null, create: bool, manage_existing: bool, update_password: bool, send_welcome_email: bool, delete_data: bool}>,
+     *     email_forwarders: array<int, array{address: string, forward_to: string}>,
+     *     ftp_accounts: array<int, array{user: string, domain: string, password: string, password_hash: string, quota: int|null, home_directory: string, create: bool, manage_existing: bool, update_password: bool, delete_home: bool}>
+     * }
+     */
+    private function accountResourceConfigs(object $project, object $profile): array
+    {
+        $options = $this->cpanelOptions($profile);
+        $dnsZone = $this->interpolate($this->arrayString($options, 'dns_zone'), $project, $profile);
+        $dnsRecords = [];
+        foreach ($this->resourceConfigEntries($options['dns_records'] ?? []) as $entry) {
+            $rawData = $entry['data'] ?? $entry['value'] ?? [];
+            $values = \is_array($rawData) ? $rawData : [$rawData];
+            $data = [];
+            foreach ($values as $value) {
+                if (\is_scalar($value)) {
+                    $data[] = $this->interpolate($this->scalarString($value), $project, $profile);
+                }
+            }
+            $dnsRecords[] = [
+                'zone' => $this->interpolate($this->arrayString($entry, 'zone', $dnsZone), $project, $profile),
+                'name' => $this->interpolate($this->arrayString($entry, 'name', $this->arrayString($entry, '_key')), $project, $profile),
+                'type' => \strtoupper($this->arrayString($entry, 'type')),
+                'data' => $data,
+                'ttl' => $this->nullableInteger($entry['ttl'] ?? null) ?? 300,
+            ];
+        }
+
+        $emailAccounts = [];
+        foreach ($this->resourceConfigEntries($options['email_accounts'] ?? []) as $entry) {
+            $emailAccounts[] = [
+                'address' => \strtolower($this->interpolate(
+                    $this->arrayString($entry, 'address', $this->arrayString($entry, '_key')),
+                    $project,
+                    $profile,
+                )),
+                'password' => $this->interpolate($this->arrayString($entry, 'password'), $project, $profile),
+                'password_hash' => $this->interpolate($this->arrayString($entry, 'password_hash'), $project, $profile),
+                'quota' => $this->nullableInteger($entry['quota'] ?? null),
+                'create' => ! isset($entry['create']) || (bool) $entry['create'],
+                'manage_existing' => (bool) ($entry['manage_existing'] ?? false),
+                'update_password' => (bool) ($entry['update_password'] ?? false),
+                'send_welcome_email' => (bool) ($entry['send_welcome_email'] ?? false),
+                'delete_data' => (bool) ($entry['delete_data'] ?? false),
+            ];
+        }
+
+        $emailForwarders = [];
+        foreach ($this->resourceConfigEntries($options['email_forwarders'] ?? []) as $entry) {
+            $emailForwarders[] = [
+                'address' => \strtolower($this->interpolate(
+                    $this->arrayString($entry, 'address', $this->arrayString($entry, '_key')),
+                    $project,
+                    $profile,
+                )),
+                'forward_to' => \strtolower($this->interpolate(
+                    $this->arrayString($entry, 'forward_to'),
+                    $project,
+                    $profile,
+                )),
+            ];
+        }
+
+        $ftpAccounts = [];
+        foreach ($this->resourceConfigEntries($options['ftp_accounts'] ?? []) as $entry) {
+            $ftpAccounts[] = [
+                'user' => $this->interpolate(
+                    $this->arrayString($entry, 'user', $this->arrayString($entry, '_key')),
+                    $project,
+                    $profile,
+                ),
+                'domain' => \strtolower($this->interpolate(
+                    $this->arrayString($entry, 'domain', $this->domain($profile)),
+                    $project,
+                    $profile,
+                )),
+                'password' => $this->interpolate($this->arrayString($entry, 'password'), $project, $profile),
+                'password_hash' => $this->interpolate($this->arrayString($entry, 'password_hash'), $project, $profile),
+                'quota' => $this->nullableInteger($entry['quota'] ?? null),
+                'home_directory' => \trim($this->interpolate(
+                    $this->arrayString($entry, 'home_directory', \trim($this->deployPath($profile), '/')),
+                    $project,
+                    $profile,
+                ), '/'),
+                'create' => ! isset($entry['create']) || (bool) $entry['create'],
+                'manage_existing' => (bool) ($entry['manage_existing'] ?? false),
+                'update_password' => (bool) ($entry['update_password'] ?? false),
+                'delete_home' => (bool) ($entry['delete_home'] ?? false),
+            ];
+        }
+
+        return [
+            'dns_records' => $dnsRecords,
+            'email_accounts' => $emailAccounts,
+            'email_forwarders' => $emailForwarders,
+            'ftp_accounts' => $ftpAccounts,
+        ];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function resourceConfigEntries(mixed $value): array
+    {
+        if (! \is_array($value)) {
+            return [];
+        }
+
+        $entries = [];
+        foreach ($value as $key => $entry) {
+            if (! \is_array($entry)) {
+                continue;
+            }
+            if (\is_string($key)) {
+                $entry['_key'] = $key;
+            }
+            $entries[] = $entry;
+        }
+
+        return $entries;
+    }
+
+    private function nullableInteger(mixed $value): ?int
+    {
+        return \is_numeric($value) ? (int) $value : null;
     }
 
     /**

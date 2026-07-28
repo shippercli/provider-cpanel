@@ -288,6 +288,117 @@ test('php mysql cron redirect ssl and alias lifecycle is applied through cpanel 
         );
 });
 
+test('dns email and ftp resources are reconciled without leaking credentials and safely destroyed', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, [
+        'deployment_method' => 'fileman',
+    ]);
+    $soa = [
+        'type' => 'record',
+        'line_index' => 0,
+        'record_type' => 'SOA',
+        'dname_b64' => \base64_encode('example.com.'),
+        'data_b64' => \array_map('\base64_encode', [
+            'ns.example.com.',
+            'hostmaster.example.com.',
+            '2026072801',
+            '3600',
+            '1800',
+            '1209600',
+            '86400',
+        ]),
+        'ttl' => 86400,
+    ];
+    $txt = [
+        'type' => 'record',
+        'line_index' => 9,
+        'record_type' => 'TXT',
+        'dname_b64' => \base64_encode('_shipper.app.example.com.'),
+        'data_b64' => [\base64_encode('verification-token')],
+        'ttl' => 300,
+    ];
+    $client->responseQueues['uapi:DNS:parse_zone'] = [
+        $client->success([$soa]),
+        $client->success([$soa, $txt]),
+    ];
+    $client->responses['uapi:Email:list_pops'] = $client->success([]);
+    $client->responses['uapi:Email:list_forwarders'] = $client->success([]);
+    $client->responses['uapi:Ftp:list_ftp'] = $client->success([]);
+    $profile = new CpanelTestProfile([
+        'domain' => 'app.example.com',
+        'deploy_path' => '/account-resources',
+        'runtime' => ['type' => 'static'],
+        'cpanel' => [
+            'archive_extraction' => 'direct',
+            'dns_zone' => 'example.com',
+            'dns_records' => [
+                'verification' => [
+                    'name' => '_shipper.app.example.com',
+                    'type' => 'TXT',
+                    'data' => ['verification-token'],
+                    'ttl' => 300,
+                ],
+            ],
+            'email_accounts' => [
+                'deploy' => [
+                    'address' => 'deploy@app.example.com',
+                    'password' => 'mail-secret',
+                    'quota' => 25,
+                    'delete_data' => true,
+                ],
+            ],
+            'email_forwarders' => [
+                'alerts' => [
+                    'address' => 'alerts@app.example.com',
+                    'forward_to' => 'deploy@app.example.com',
+                ],
+            ],
+            'ftp_accounts' => [
+                'shipperdeploy' => [
+                    'domain' => 'app.example.com',
+                    'password' => 'ftp-secret',
+                    'quota' => 50,
+                    'home_directory' => 'account-resources',
+                ],
+            ],
+        ],
+    ]);
+
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeTrue()
+        ->and(cpanelProviderCalls($client, 'uapi', 'DNS', 'mass_edit_zone'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'uapi', 'Email', 'add_pop'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'uapi', 'Email', 'add_forwarder'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'uapi', 'Ftp', 'add_ftp'))->toHaveCount(1);
+
+    $manifest = \json_decode($client->uploadedFiles['.shipper-manifest.json'], true);
+    expect($manifest['dns_records'][0]['created'])->toBeTrue()
+        ->and($manifest['email_accounts'][0]['created'])->toBeTrue()
+        ->and($manifest['email_forwarders'][0]['created'])->toBeTrue()
+        ->and($manifest['ftp_accounts'][0]['created'])->toBeTrue()
+        ->and(\json_encode($manifest))->not->toContain(
+            'verification-token',
+            'mail-secret',
+            'ftp-secret',
+        );
+
+    $client->responses['uapi:Fileman:get_file_content'] = $client->success([
+        'content' => \json_encode($manifest, JSON_THROW_ON_ERROR),
+    ]);
+
+    expect($provider->destroy(new CpanelTestProject('.'), $profile))->toBeTrue()
+        ->and(cpanelProviderCalls($client, 'uapi', 'DNS', 'mass_edit_zone'))->toHaveCount(2)
+        ->and(cpanelProviderCalls($client, 'uapi', 'Email', 'delete_pop'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'uapi', 'Email', 'delete_forwarder'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'uapi', 'Ftp', 'delete_ftp'))->toHaveCount(1);
+
+    $dnsDelete = cpanelProviderCalls($client, 'uapi', 'DNS', 'mass_edit_zone')[1];
+    $mailDelete = cpanelProviderCalls($client, 'uapi', 'Email', 'delete_pop')[0];
+    $ftpDelete = cpanelProviderCalls($client, 'uapi', 'Ftp', 'delete_ftp')[0];
+    expect($dnsDelete['parameters']['remove'])->toBe([9])
+        ->and($mailDelete['parameters'])->not->toHaveKey('flags')
+        ->and($ftpDelete['parameters']['destroy'])->toBe(0);
+});
+
 test('node applications are registered with passenger', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [

@@ -85,6 +85,81 @@ Release archives are stored under
 They contain only the managed deployment files, not a full cPanel account or
 database backup.
 
+## DNS records
+
+DNS records are opt-in and require a zone that the cPanel account can edit.
+Shipper adopts an exact existing record without claiming ownership. It updates
+or deletes only records that its manifest proves Shipper created.
+
+```yaml
+cpanel:
+  dns_zone: example.com
+  dns_records:
+    verification:
+      name: _shipper.api.example.com
+      type: TXT
+      data:
+        - "${DEPLOYMENT_VERIFICATION}"
+      ttl: 300
+```
+
+Record values are hashed before they enter the deployment manifest, so
+verification tokens are not written into the document root. cPanel DNS changes
+affect only zones for which the cPanel server is authoritative; externally
+managed DNS such as Cloudflare remains separate.
+
+## Email accounts and forwarders
+
+```yaml
+cpanel:
+  email_accounts:
+    deploy:
+      address: deploy@api.example.com
+      password: "${MAIL_PASSWORD}"
+      quota: 250
+      update_password: false
+      delete_data: false
+  email_forwarders:
+    alerts:
+      address: alerts@api.example.com
+      forward_to: deploy@api.example.com
+```
+
+Use `create: false` to require an existing account without creating it.
+`manage_existing: true` explicitly permits quota and opt-in password changes on
+an adopted account. Passwords and password hashes are never stored in the
+manifest. Destroy removes only Shipper-created accounts; mailbox data is
+preserved unless `delete_data: true` was explicitly configured.
+
+## FTP accounts
+
+```yaml
+cpanel:
+  ftp_accounts:
+    deploy:
+      user: shipperdeploy
+      domain: api.example.com
+      password: "${FTP_PASSWORD}"
+      home_directory: api
+      quota: 500
+      update_password: false
+      delete_home: false
+```
+
+FTP home directories are relative to the cPanel account home. Existing accounts
+are adopted without mutation unless `manage_existing: true` is explicit.
+Destroy removes only Shipper-created FTP accounts and preserves their home
+directories unless `delete_home: true` was recorded.
+
+## Full-account backups
+
+cPanel account users can request a full backup with
+`Backup/fullbackup_to_homedir`, but Shipper does not run this expensive,
+quota-consuming operation implicitly. Use an explicit `cpanel.operations`
+entry when account-wide backup creation is required. Full-account restoration
+is a privileged WHM operation and is intentionally not treated as an ordinary
+project rollback.
+
 ## Account-specific operations
 
 Long-tail cPanel operations can be attached to `before_apply`, `after_apply`,

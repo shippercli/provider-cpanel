@@ -26,10 +26,13 @@ Official sources:
 | Static and PHP deployment | Upload an archive, extract large archives through a temporary marker-owned cron task, clean managed artifacts, and preserve unrelated files | `Fileman/upload_files`, `Fileman/*`, API 2 `Cron/*` |
 | Git deployment | Create or update a cPanel-managed repository outside the document root, select the branch, deploy through `.cpanel.yml`, and report task state | `VersionControl/*`, `VersionControlDeployment/*` |
 | Domain lifecycle | Detect existing domains; create and clean up managed subdomains, addon domains, and aliases; control document roots | `DomainInfo/*`, `SubDomain/*`, API 2 `AddonDomain/*`, API 2 `Park/*` |
+| DNS records | Add, update, adopt, and safely remove manifest-owned zone records without storing record values in the manifest | `DNS/parse_zone`, `DNS/mass_edit_zone` |
 | PHP runtime | Discover installed versions, set the vhost version, and configure supported `php.ini` directives | `LangPHP/*` |
 | Node.js, Python, and Ruby runtime | Register, update, enable, disable, and remove Passenger applications; install declared dependencies | `PassengerApps/*` |
 | Environment variables | Write managed environment files for file-based applications and synchronize Passenger environment variables | `Fileman/save_file_content`, `PassengerApps/edit_application` |
 | MySQL and PostgreSQL | Create databases and users, set passwords and privileges, expose resolved names to deployment environment, and perform opt-in cleanup | `Mysql/*`, `Postgresql/*` |
+| Email routing | Create or require mailboxes, manage quotas and opt-in password changes, reconcile forwarders, and clean up only manifest-owned resources | `Email/*` |
+| Scoped FTP access | Create or require FTP accounts scoped to an application path, manage quota and opt-in credentials, and preserve data by default during cleanup | `Ftp/*` |
 | Cron | Reconcile marker-owned cron entries without deleting unrelated user entries | API 2 `Cron/*` |
 | Redirects and HTTPS | Reconcile redirects, start AutoSSL, install custom certificates, and toggle HTTPS redirect where supported | `Mime/*`, `SSL/*` |
 | Backups and rollback | Create deployment-scoped archives outside the managed web root, report release identifiers, enforce retention, and restore an explicit or latest release | Fileman operations and marker-owned cron tasks |
@@ -39,7 +42,7 @@ Official sources:
 ## Long-tail coverage
 
 cPanel exposes substantially more account functionality than a deployment
-schema should model, including email, FTP, Web Disk, DNSSEC, ModSecurity,
+schema should model, including Web Disk, DNSSEC, ModSecurity,
 directory privacy, hotlink protection, dynamic DNS, team users, and backup
 destinations. The provider must expose typed generic `uapi`, `api2`, and `whm`
 calls so these operations are available without pretending they belong in every
@@ -62,9 +65,10 @@ Version 1.0 is released only after all of the following have been verified:
 4. Private sample repositories verify raw HTML, raw PHP, Laravel with a real
    database, cPanel Git deployment, and Passenger configuration. A live
    Node.js HTTP assertion runs only on accounts with an EA Node.js runtime.
-5. Live workflows verify domain creation, PHP version selection, environment
-   variables, database/user/privileges, cron, AutoSSL/HTTPS, deployment status,
-   rollback, and opt-in cleanup.
+5. Live workflows verify domain creation, DNS records, mailboxes, forwarders,
+   scoped FTP accounts, PHP version selection, environment variables,
+   database/user/privileges, cron, AutoSSL/HTTPS, deployment status, rollback,
+   and opt-in cleanup.
 6. The temporary repository containing raw cPanel credentials is deleted and
    the exposed password is rotated.
 7. Provider metadata and website documentation match verified behavior rather
