@@ -2,6 +2,8 @@
   "name": "cPanel",
   "slug": "cpanel",
   "logo": "logo.svg",
+  "status": "beta",
+  "statusNote": "Currently in early testing. Some features may not work as expected on all cPanel accounts or hosting configurations.",
   "description": "Deploy and operate applications on cPanel accounts with API access.",
   "features": [
     "Static and PHP Deployments",
