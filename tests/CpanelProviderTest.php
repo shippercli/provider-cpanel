@@ -65,6 +65,14 @@ test('plugin exposes cpanel provider mapping', function (): void {
     ]);
 });
 
+test('provider declares capability states explicitly', function (): void {
+    $capabilities = (new CpanelProvider)->capabilities();
+
+    expect($capabilities['app_deploy']['state'])->toBe('supported')
+        ->and($capabilities['server_lifecycle']['state'])->toBe('unsupported')
+        ->and($capabilities['ssl']['state'])->toBe('partial');
+});
+
 test('plan describes first-class cpanel lifecycle operations', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = new CpanelProvider([

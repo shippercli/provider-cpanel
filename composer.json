@@ -7,7 +7,7 @@
         "php": "^8.3",
         "composer-runtime-api": "^2.1",
         "guzzlehttp/guzzle": "^7.9",
-        "shippercli/contracts": "^1.0"
+        "shippercli/contracts": "^1.1"
     },
     "require-dev": {
         "pestphp/pest": "^3.8"
