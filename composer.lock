@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "9f9e07c5509c2e437e53e85344126afe",
+    "content-hash": "8f1b362560ca291d32d45d7723963933",
     "packages": [
         {
             "name": "guzzlehttp/guzzle",
@@ -543,16 +543,16 @@
         },
         {
             "name": "shippercli/contracts",
-            "version": "v1.0.0",
+            "version": "v1.1.0",
             "source": {
                 "type": "git",
                 "url": "https://github.com/shippercli/contracts.git",
-                "reference": "07cc0fea028294b1fa23bf4dff49e6c2ef52c720"
+                "reference": "a09d516da61e74461fdce1ef57ddc4c2269b87d6"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/shippercli/contracts/zipball/07cc0fea028294b1fa23bf4dff49e6c2ef52c720",
-                "reference": "07cc0fea028294b1fa23bf4dff49e6c2ef52c720",
+                "url": "https://api.github.com/repos/shippercli/contracts/zipball/a09d516da61e74461fdce1ef57ddc4c2269b87d6",
+                "reference": "a09d516da61e74461fdce1ef57ddc4c2269b87d6",
                 "shasum": ""
             },
             "require": {
@@ -571,9 +571,9 @@
             "description": "Contracts and interfaces for Shipper CLI providers",
             "support": {
                 "issues": "https://github.com/shippercli/contracts/issues",
-                "source": "https://github.com/shippercli/contracts/tree/v1.0.0"
+                "source": "https://github.com/shippercli/contracts/tree/v1.1.0"
             },
-            "time": "2026-07-27T18:36:51+00:00"
+            "time": "2026-08-03T12:13:29+00:00"
         },
         {
             "name": "symfony/deprecation-contracts",

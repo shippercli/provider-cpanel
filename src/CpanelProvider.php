@@ -11,6 +11,7 @@ use ShipperCli\Contracts\DeploymentLogsProviderInterface;
 use ShipperCli\Contracts\DeploymentProviderInterface;
 use ShipperCli\Contracts\DeploymentRollbackProviderInterface;
 use ShipperCli\Contracts\DeploymentStatusProviderInterface;
+use ShipperCli\Contracts\ProviderCapabilitiesInterface;
 use ShipperCli\ProviderCpanel\Api\CpanelApiClient;
 use ShipperCli\ProviderCpanel\Api\CpanelApiClientInterface;
 use Throwable;
@@ -19,6 +20,7 @@ use ZipArchive;
 final class CpanelProvider implements
     DeploymentLogsProviderInterface,
     DeploymentProviderInterface,
+    ProviderCapabilitiesInterface,
     DeploymentRollbackProviderInterface,
     DeploymentStatusProviderInterface
 {
@@ -51,6 +53,23 @@ final class CpanelProvider implements
     public function getName(): string
     {
         return 'cpanel';
+    }
+
+    public function capabilities(): array
+    {
+        return [
+            'app_deploy' => ['state' => 'supported'],
+            'server_lifecycle' => ['state' => 'unsupported'],
+            'domain_management' => ['state' => 'supported'],
+            'ssl' => ['state' => 'partial'],
+            'databases' => ['state' => 'supported'],
+            'profiles' => ['state' => 'supported'],
+            'background_workloads' => ['state' => 'partial'],
+            'env' => ['state' => 'supported'],
+            'observability' => ['state' => 'partial'],
+            'rollback' => ['state' => 'partial'],
+            'previews' => ['state' => 'partial'],
+        ];
     }
 
     public function getLastError(): string
