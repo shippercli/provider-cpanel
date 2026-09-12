@@ -7,6 +7,7 @@ use ShipperCli\ProviderCpanel\CpanelProvider;
 use ShipperCli\ProviderCpanel\Tests\Fixtures\CpanelTestProfile;
 use ShipperCli\ProviderCpanel\Tests\Fixtures\CpanelTestProject;
 use ShipperCli\ProviderCpanel\Tests\Fixtures\FakeCpanelApiClient;
+use ShipperCli\Contracts\CapabilityManifest;
 
 /** @return array<int, array<string, mixed>> */
 function cpanelProviderCalls(
@@ -71,6 +72,11 @@ test('provider declares capability states explicitly', function (): void {
     expect($capabilities['app_deploy']['state'])->toBe('supported')
         ->and($capabilities['server_lifecycle']['state'])->toBe('unsupported')
         ->and($capabilities['ssl']['state'])->toBe('partial');
+});
+
+test('provider capability manifest conforms to the shared contract', function (): void {
+    expect(CapabilityManifest::from((new CpanelProvider)->capabilities())->toArray())
+        ->toBe((new CpanelProvider)->capabilities());
 });
 
 test('plan describes first-class cpanel lifecycle operations', function (): void {

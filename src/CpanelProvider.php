@@ -61,14 +61,14 @@ final class CpanelProvider implements
             'app_deploy' => ['state' => 'supported'],
             'server_lifecycle' => ['state' => 'unsupported'],
             'domain_management' => ['state' => 'supported'],
-            'ssl' => ['state' => 'partial'],
+            'ssl' => ['state' => 'partial', 'limitations' => ['Certificate issuance and renewal remain managed by cPanel AutoSSL or the account owner.']],
             'databases' => ['state' => 'supported'],
             'profiles' => ['state' => 'supported'],
-            'background_workloads' => ['state' => 'partial'],
+            'background_workloads' => ['state' => 'partial', 'limitations' => ['Shipper configures scheduled tasks but does not supervise long-running workers.']],
             'env' => ['state' => 'supported'],
-            'observability' => ['state' => 'partial'],
-            'rollback' => ['state' => 'partial'],
-            'previews' => ['state' => 'partial'],
+            'observability' => ['state' => 'partial', 'limitations' => ['Deployment diagnostics are available, but application metrics and centralized logs are external to cPanel.']],
+            'rollback' => ['state' => 'partial', 'limitations' => ['Rollback depends on retained release archives and is unavailable for every deployment method.']],
+            'previews' => ['state' => 'partial', 'limitations' => ['Preview environments require preconfigured cPanel DNS and subdomain capacity.']],
         ];
     }
 
