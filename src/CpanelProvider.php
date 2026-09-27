@@ -68,7 +68,7 @@ final class CpanelProvider implements
             'env' => ['state' => 'supported'],
             'observability' => ['state' => 'partial', 'limitations' => ['Deployment diagnostics are available, but application metrics and centralized logs are external to cPanel.']],
             'rollback' => ['state' => 'partial', 'limitations' => ['Rollback depends on retained release archives and is unavailable for every deployment method.']],
-            'previews' => ['state' => 'partial', 'limitations' => ['Preview environments require preconfigured cPanel DNS and subdomain capacity.']],
+            'previews' => ['state' => 'supported', 'limitations' => ['Preview environments require cPanel DNS or subdomain capacity; cleanup remains ownership-guarded.']],
         ];
     }
 

@@ -71,7 +71,8 @@ test('provider declares capability states explicitly', function (): void {
 
     expect($capabilities['app_deploy']['state'])->toBe('supported')
         ->and($capabilities['server_lifecycle']['state'])->toBe('unsupported')
-        ->and($capabilities['ssl']['state'])->toBe('partial');
+        ->and($capabilities['ssl']['state'])->toBe('partial')
+        ->and($capabilities['previews']['state'])->toBe('supported');
 });
 
 test('provider capability manifest conforms to the shared contract', function (): void {
