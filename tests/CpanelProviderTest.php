@@ -1273,3 +1273,22 @@ test('explicit git deployment reports unavailable account features precisely', f
         ->and($provider->getLastError())
         ->toBe('List cPanel Git repositories failed: Git Version Control is not enabled for this account');
 });
+
+test('a copied manifest cannot authorize a different target domain', function (string $operation): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:Fileman:get_file_content'] = $client->success([
+        'content' => json_encode([
+            'project' => 'sample',
+            'profile' => 'production',
+            'domain' => ['domain' => 'other.example.com', 'created' => true],
+        ], JSON_THROW_ON_ERROR),
+    ]);
+    $provider = cpanelProviderWithExistingDomain($client);
+    $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app']);
+
+    expect($provider->{$operation}(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+        ->and($provider->getLastError())->toContain('belongs to another deployment')
+        ->and(array_map(static fn (array $call): string => $call['module'].':'.$call['function'], $client->calls))
+        ->toBe(['Variables:get_user_information', 'Fileman:get_file_content'])
+        ->and($client->uploadedFiles)->toBe([]);
+})->with(['apply', 'destroy']);

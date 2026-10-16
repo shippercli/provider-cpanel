@@ -388,8 +388,7 @@ final class CpanelProvider implements
                 throw new RuntimeException('Refusing cPanel destroy because no matching Shipper manifest exists');
             }
 
-            if (($manifest['project'] ?? null) !== $this->projectName($project)
-                || ($manifest['profile'] ?? null) !== $this->profileName($profile)) {
+            if (! $this->manifestMatches($manifest, $project, $profile)) {
                 throw new RuntimeException('Refusing cPanel destroy because the Shipper manifest belongs to another deployment');
             }
 
@@ -1680,7 +1679,9 @@ final class CpanelProvider implements
     private function manifestMatches(array $manifest, object $project, object $profile): bool
     {
         return ($manifest['project'] ?? null) === $this->projectName($project)
-            && ($manifest['profile'] ?? null) === $this->profileName($profile);
+            && ($manifest['profile'] ?? null) === $this->profileName($profile)
+            && (! isset($manifest['domain']['domain'])
+                || $manifest['domain']['domain'] === $this->domain($profile));
     }
 
     /**
