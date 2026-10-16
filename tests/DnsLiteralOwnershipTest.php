@@ -76,3 +76,28 @@ test('unrelated binary TXT data remains readable without losing bytes', function
     expect($state['dns_records'][0]['created'])->toBeFalse()
         ->and(cpanelProviderCalls($client, 'uapi', 'DNS', 'mass_edit_zone'))->toBeEmpty();
 });
+
+test('versioned DNS ownership survives repeated reconciliation', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:DNS:parse_zone'] = $client->success([literalDnsZone(' verification ')[0]]);
+    $manager = new CpanelAccountResourceManager($client);
+    $first = $manager->reconcile(literalDnsConfiguration(' verification '), []);
+    $client->responses['uapi:DNS:parse_zone'] = $client->success(literalDnsZone(' verification '));
+    $client->calls = [];
+    $second = $manager->reconcile(literalDnsConfiguration(' verification '), $first);
+    expect($second['dns_records'])->toBe($first['dns_records'])
+        ->and(cpanelProviderCalls($client, 'uapi', 'DNS', 'mass_edit_zone'))->toBeEmpty();
+});
+
+test('explicitly relinquished legacy DNS ownership remains unowned', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:DNS:parse_zone'] = $client->success(literalDnsZone('verification'));
+    $previous = ['dns_records' => [['zone' => 'example.com', 'name' => '_shipper.example.com', 'type' => 'TXT',
+        'data_hash' => hash('sha256', json_encode(['verification'])), 'created' => false]]];
+    $manager = new CpanelAccountResourceManager($client);
+    $state = $manager->reconcile(literalDnsConfiguration('verification'), $previous);
+    $manager->destroy($state);
+    expect($state['dns_records'][0]['created'])->toBeFalse()
+        ->and($state['dns_records'][0]['data_hash_version'])->toBe(2)
+        ->and(cpanelProviderCalls($client, 'uapi', 'DNS', 'mass_edit_zone'))->toBeEmpty();
+});
