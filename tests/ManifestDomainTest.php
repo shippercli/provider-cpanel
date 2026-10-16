@@ -11,7 +11,7 @@ test('missing or malformed manifest domains cannot authorize a target', function
         $manifest = ['project' => 'sample', 'profile' => 'production'];
         if ($domain !== 'missing') $manifest['domain'] = $domain;
         $client->responses['uapi:Fileman:get_file_content'] = $client->success(['content' => json_encode($manifest, JSON_THROW_ON_ERROR)]);
-        $provider = new CpanelProvider(['host' => 'cpanel.example.com', 'username' => 'shipper', 'password' => 'secret', 'adopt_existing' => true], $client);
+        $provider = new CpanelProvider(['host' => 'cpanel.example.com', 'username' => 'shipper', 'password' => 'secret', 'adopt_existing' => ['project' => 'sample', 'profile' => 'production', 'domain' => 'app.example.com']], $client);
         $project = new CpanelTestProject('.');
         $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app']);
         if ($operation === 'plan') {

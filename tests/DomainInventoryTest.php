@@ -9,7 +9,7 @@ test('unreadable domain inventories cannot authorize creation or adoption', func
     foreach ([null, [], 'unexpected', ['unknown' => []], ['main_domain' => null], ['main_domain' => ''], ['sub_domains' => 'invalid']] as $inventory) {
         $client = new FakeCpanelApiClient;
         $client->responses['uapi:DomainInfo:domains_data'] = $client->success($inventory);
-        $provider = new CpanelProvider(['host' => 'cpanel.example.com', 'username' => 'shipper', 'password' => 'secret', 'adopt_existing' => true], $client);
+        $provider = new CpanelProvider(['host' => 'cpanel.example.com', 'username' => 'shipper', 'password' => 'secret', 'adopt_existing' => ['project' => 'sample', 'profile' => 'production', 'domain' => 'app.example.com']], $client);
         $project = new CpanelTestProject('.');
         $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app']);
         if ($operation === 'plan') {

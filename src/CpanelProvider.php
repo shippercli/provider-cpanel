@@ -85,9 +85,9 @@ final class CpanelProvider implements
     public function validate(object $project, object $profile): array
     {
         $errors = [];
-        $adopt = $this->cpanelOptions($profile)['adopt_existing'] ?? $this->config['adopt_existing'] ?? false;
-        if (! \is_bool($adopt)) {
-            $errors[] = 'cPanel adopt_existing must be a boolean.';
+        $adoption = $this->adoptionConsent($profile);
+        if ($adoption !== null && $adoption !== false && ! $this->adoptionConsentMatches($adoption, $project, $profile)) {
+            $errors[] = 'cPanel adopt_existing must name the exact project, profile, and domain being adopted.';
         }
 
         if ($this->stringConfig('host') === '') {
@@ -174,24 +174,37 @@ final class CpanelProvider implements
         $runtime = $this->runtimeConfig($project, $profile);
         $accountResources = $this->accountResourceConfigs($project, $profile);
         $blocked = null;
+        $domainDisposition = 'new';
         try {
             $manifest = $this->readManifest($profile);
             if ($manifest !== null && ! $this->manifestMatches($manifest, $project, $profile)) {
                 $blocked = 'The cPanel Shipper manifest belongs to another deployment.';
+            } elseif ($manifest !== null) {
+                $domainDisposition = ($manifest['domain']['ownership_state'] ?? null) === 'adopted'
+                    || ($manifest['domain']['created'] ?? null) === false
+                    ? 'adopted'
+                    : 'created';
             } elseif ($manifest === null) {
                 $inventory = $this->required($this->api()->uapi('DomainInfo', 'domains_data', ['format' => 'hash']), 'Inspect cPanel domain ownership');
                 $inventory = $this->validateDomainInventory($inventory);
-                $adopt = $this->cpanelOptions($profile)['adopt_existing'] ?? $this->config['adopt_existing'] ?? false;
-                if ($this->classifyDomain($inventory, $domain) !== null && $adopt !== true) {
-                    $blocked = 'An existing cPanel domain requires explicit adopt_existing: true after ownership review.';
+                $existingDomain = $this->classifyDomain($inventory, $domain) !== null;
+                $authorized = $this->adoptionConsentMatches($this->adoptionConsent($profile), $project, $profile);
+                if ($existingDomain && ! $authorized) {
+                    $blocked = 'An existing cPanel domain requires explicit adoption consent naming this project, profile, and domain.';
                 }
+                $domainDisposition = $existingDomain ? 'adopt' : 'new';
             }
         } catch (\Throwable) {
             $blocked = 'Unable to verify cPanel deployment ownership. Review the manifest and API access before deployment.';
         }
         $actions = [
             'Discover enabled cPanel account features',
-            "Create or find domain: {$domain}",
+            match ($domainDisposition) {
+                'adopt' => "Adopt existing cPanel domain: {$domain}",
+                'adopted' => "Use previously adopted cPanel domain: {$domain}",
+                'created' => "Use Shipper-created cPanel domain: {$domain}",
+                default => "Create cPanel domain: {$domain}",
+            },
         ];
 
         if ($this->boolCpanelOption($profile, 'backup_before_deploy', false)) {
@@ -299,9 +312,9 @@ final class CpanelProvider implements
             if ($previousManifest === null) {
                 $domainInventory = $this->required($this->api()->uapi('DomainInfo', 'domains_data', ['format' => 'hash']), 'Inspect cPanel domain ownership');
                 $domainInventory = $this->validateDomainInventory($domainInventory);
-                $adopt = $this->cpanelOptions($profile)['adopt_existing'] ?? $this->config['adopt_existing'] ?? false;
-                if ($this->classifyDomain($domainInventory, $this->domain($profile)) !== null && $adopt !== true) {
-                    throw new RuntimeException('Refusing cPanel apply to an existing domain without a matching Shipper manifest; explicitly set adopt_existing: true after reviewing the target.');
+                $existing = $this->classifyDomain($domainInventory, $this->domain($profile)) !== null;
+                if ($existing && ! $this->adoptionConsentMatches($this->adoptionConsent($profile), $project, $profile)) {
+                    throw new RuntimeException('Refusing cPanel apply to an existing domain without explicit adoption consent for this project, profile, and domain.');
                 }
             }
 
@@ -314,6 +327,7 @@ final class CpanelProvider implements
                 ['domain', 'type'],
                 ['created'],
             );
+            $domainState['ownership_state'] = $domainState['created'] ? 'created' : 'adopted';
             $runtime = $this->runtimeConfig($project, $profile);
 
             $this->configurePhp($domainState['domain'], $runtime, $profile);
@@ -558,7 +572,7 @@ final class CpanelProvider implements
     }
 
     /**
-     * @return array{domain: string, type: string, created: bool, primary_domain: string}
+     * @return array{domain: string, type: string, created: bool, ownership_state: string, primary_domain: string}
      */
     private function ensureDomain(object $profile, mixed $domains = null): array
     {
@@ -575,6 +589,7 @@ final class CpanelProvider implements
                 'domain' => $domain,
                 'type' => $existingType,
                 'created' => false,
+                'ownership_state' => 'adopted',
                 'primary_domain' => $this->primaryDomain($domains),
             ];
         }
@@ -625,6 +640,7 @@ final class CpanelProvider implements
             'domain' => $domain,
             'type' => $type,
             'created' => true,
+            'ownership_state' => 'created',
             'primary_domain' => $primaryDomain,
         ];
     }
@@ -1717,6 +1733,13 @@ final class CpanelProvider implements
             || ! \is_string($manifest['domain']['domain'] ?? null)
             || \trim($manifest['domain']['domain']) === '') {
             throw new RuntimeException('The cPanel Shipper manifest lacks a valid target domain; review and migrate its ownership evidence before retrying.');
+        }
+        $domainState = $manifest['domain'];
+        if (\array_key_exists('ownership_state', $domainState)
+            && (! \in_array($domainState['ownership_state'], ['created', 'adopted'], true)
+                || (\array_key_exists('created', $domainState)
+                    && $domainState['created'] !== ($domainState['ownership_state'] === 'created')))) {
+            throw new RuntimeException('The cPanel manifest domain ownership state is inconsistent; review it before retrying.');
         }
 
         $this->validateManifestBooleans($manifest);
@@ -3442,6 +3465,20 @@ final class CpanelProvider implements
         $options = $this->profileValue($profile, 'cpanel', []);
 
         return \is_array($options) ? $options : [];
+    }
+
+    private function adoptionConsent(object $profile): mixed
+    {
+        return $this->cpanelOptions($profile)['adopt_existing'] ?? $this->config['adopt_existing'] ?? null;
+    }
+
+    private function adoptionConsentMatches(mixed $consent, object $project, object $profile): bool
+    {
+        return \is_array($consent)
+            && \count($consent) === 3
+            && ($consent['project'] ?? null) === $this->projectName($project)
+            && ($consent['profile'] ?? null) === $this->profileName($profile)
+            && ($consent['domain'] ?? null) === $this->domain($profile);
     }
 
     private function stringCpanelOption(object $profile, string $key, string $default = ''): string

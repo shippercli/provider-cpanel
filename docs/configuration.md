@@ -33,6 +33,13 @@ cPanel Git repositories must not share the domain document root. Keep
 `cpanel.repository_root` separate from `deploy_path`, and commit a `.cpanel.yml`
 file that copies the intended deployment files into the document root.
 
+An existing domain without a matching Shipper manifest requires explicit
+adoption consent. Set `cpanel.adopt_existing` to a mapping containing the exact
+project name, profile name, and lowercase domain. A plan then names that domain
+as an adoption action, and the manifest records `ownership_state: adopted` so
+destroy preserves the domain. Consent for another project, profile, or domain
+does not authorize adoption.
+
 Private repositories require Git credentials to be configured on the cPanel
 account before deployment. Prefer short-lived credentials or a credential helper,
 and remove temporary credentials after the deployment completes. Shipper never

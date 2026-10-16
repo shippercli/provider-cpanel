@@ -56,7 +56,7 @@ function cpanelProviderWithExistingDomain(
         'host' => 'cpanel.example.com',
         'username' => 'shipper',
         'password' => 'secret',
-        'adopt_existing' => true,
+        'adopt_existing' => ['project' => 'sample', 'profile' => 'production', 'domain' => strtolower($domain)],
         ...$config,
     ], $client);
 }
@@ -1305,11 +1305,11 @@ test('existing domains require explicit adoption before any mutation', function 
     $provider = cpanelProviderWithExistingDomain($client, ['adopt_existing' => $adopt]);
     $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app']);
     expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
-        ->and($provider->getLastError())->toContain('explicitly set adopt_existing: true')
+        ->and($provider->getLastError())->toContain('explicit adoption consent')
         ->and(array_map(static fn (array $call): string => $call['module'].':'.$call['function'], $client->calls))
         ->toBe(['Variables:get_user_information', 'Fileman:get_file_content', 'DomainInfo:domains_data'])
         ->and($client->uploadedFiles)->toBe([]);
-})->with([null, false, 'true', 1]);
+})->with([null, false, true, 'true', 1, [['project' => 'sample', 'profile' => 'production', 'domain' => 'other.example.com']]]);
 
 test('profile scoped explicit adoption allows deploying to an existing domain', function (): void {
     $client = new FakeCpanelApiClient;
@@ -1317,12 +1317,29 @@ test('profile scoped explicit adoption allows deploying to an existing domain', 
     $profile = new CpanelTestProfile([
         'domain' => 'app.example.com',
         'deploy_path' => '/app',
-        'cpanel' => ['adopt_existing' => true],
+        'cpanel' => ['adopt_existing' => ['project' => 'sample', 'profile' => 'production', 'domain' => 'app.example.com']],
     ]);
     expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeTrue()
         ->and($client->uploadedFiles)->toHaveKey('.shipper-manifest.json');
     $manifest = json_decode($client->uploadedFiles['.shipper-manifest.json'], true);
-    expect($manifest['domain']['created'])->toBeFalse();
+    expect($manifest['domain']['created'])->toBeFalse()
+        ->and($manifest['domain']['ownership_state'])->toBe('adopted');
+});
+
+test('adoption plan names the exact existing domain and scope', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, [], 'app.example.com');
+    $project = new CpanelTestProject('.');
+    $profile = new CpanelTestProfile([
+        'domain' => 'app.example.com',
+        'deploy_path' => '/app',
+        'cpanel' => ['adopt_existing' => ['project' => 'sample', 'profile' => 'production', 'domain' => 'app.example.com']],
+    ]);
+    $plan = $provider->plan($project, $profile);
+
+    expect($plan['blocked'])->toBeFalse()
+        ->and($plan['actions'])->toContain('Adopt existing cPanel domain: app.example.com')
+        ->and($plan['actions'])->not->toContain('Create or find domain: app.example.com');
 });
 
 test('manifest read and parse failures block mutations even with adoption enabled', function (string $operation): void {
@@ -1336,7 +1353,7 @@ test('manifest read and parse failures block mutations even with adoption enable
     foreach ($responses as $response) {
         $client = new FakeCpanelApiClient;
         $client->responses['uapi:Fileman:get_file_content'] = $response;
-        $provider = cpanelProviderWithExistingDomain($client, ['adopt_existing' => true]);
+        $provider = cpanelProviderWithExistingDomain($client, ['adopt_existing' => ['project' => 'sample', 'profile' => 'production', 'domain' => 'app.example.com']]);
         $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app']);
         expect($provider->{$operation}(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
             ->and($provider->getLastError())->toContain('manifest')->not->toContain('broken-secret-content')
