@@ -85,10 +85,6 @@ final class CpanelProvider implements
     public function validate(object $project, object $profile): array
     {
         $errors = [];
-        $booleanError = $this->deploymentBooleanError($profile);
-        if ($booleanError !== null) {
-            $errors[] = $booleanError;
-        }
 
         if ($this->stringConfig('host') === '') {
             $errors[] = 'cPanel host is required';
@@ -104,6 +100,11 @@ final class CpanelProvider implements
 
         if ($this->projectPath($project) === '') {
             $errors[] = 'Project path is required';
+        }
+
+        $booleanError = $this->deploymentBooleanError($profile);
+        if ($booleanError !== null) {
+            $errors[] = $booleanError;
         }
 
         if ($this->domain($profile) === '') {
@@ -269,8 +270,11 @@ final class CpanelProvider implements
 
     public function apply(object $project, object $profile): bool
     {
-        $this->lastError = $this->deploymentBooleanError($profile) ?? '';
-        if ($this->lastError !== '') {
+        $this->lastError = '';
+        $booleanError = $this->deploymentBooleanError($profile);
+        if ($booleanError !== null) {
+            $this->lastError = $booleanError;
+
             return false;
         }
 
@@ -504,8 +508,11 @@ final class CpanelProvider implements
         object $profile,
         ?string $release = null,
     ): bool {
-        $this->lastError = $this->deploymentBooleanError($profile) ?? '';
-        if ($this->lastError !== '') {
+        $this->lastError = '';
+        $booleanError = $this->deploymentBooleanError($profile);
+        if ($booleanError !== null) {
+            $this->lastError = $booleanError;
+
             return false;
         }
 
