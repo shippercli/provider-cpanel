@@ -137,7 +137,7 @@ final class CpanelProvider implements
                 $errors[] = "cPanel database adopt_existing must be a boolean: {$database['name']}";
             }
             if (array_key_exists('update_password', $database) && ! is_bool($database['update_password'])) {
-                $errors[] = "cPanel database update_password must be a boolean: {$database['name']}";
+                $errors[] = 'Database update_password must be a boolean';
             }
         }
 
@@ -170,7 +170,7 @@ final class CpanelProvider implements
             }
         }
 
-        return $errors;
+        return array_values(array_unique($errors));
     }
 
     public function plan(object $project, object $profile): array

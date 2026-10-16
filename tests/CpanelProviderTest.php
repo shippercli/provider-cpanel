@@ -145,6 +145,19 @@ test('validation rejects missing database password', function (): void {
     expect($errors)->toContain('Database password is required for cPanel database user: app');
 });
 
+test('database password option validation returns one stable error', function (): void {
+    $provider = cpanelProviderWithExistingDomain(new FakeCpanelApiClient, ['deployment_method' => 'fileman']);
+    $errors = $provider->validate(new CpanelTestProject('.'), new CpanelTestProfile([
+        'domain' => 'app.example.com', 'deploy_path' => '/app',
+        'databases' => ['main' => [
+            'name' => 'app', 'user' => 'app', 'type' => 'mysql', 'password' => 'secret',
+            'update_password' => 'false',
+        ]],
+    ]));
+
+    expect($errors)->toContain('Database update_password must be a boolean');
+});
+
 test('fileman apply creates directories and uploads mapped files', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [
