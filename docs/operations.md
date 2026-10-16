@@ -16,6 +16,9 @@ entire status command fail.
 
 ## Logs
 
+[One-time task cleanup](task-cleanup.md) explains cron removal, completion
+markers and safe recovery after cleanup failure.
+
 `shipper logs` reads the selected domain's Apache error log through
 `Stats/get_site_errors`. The account must expose the domain statistics feature.
 Use `--lines` from `1` through `5000`.
