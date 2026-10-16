@@ -16,7 +16,7 @@ test('rollback retention preserves its selected archive and freshly created safe
     $client->responses['api2:Cron:add_line'] = $client->success([['linekey' => '92']]);
     $backup = null;
     $discard = '19990101010101-cafebabe.tar.gz';
-    $client->responseFactories['uapi:Fileman:list_files'] = function () use ($client, $selected, $discard, &$backup): array {
+    $client->uapiResponseFactories['Fileman:list_files'] = function () use ($client, $selected, $discard, &$backup): array {
         $latest = $client->calls[array_key_last($client->calls)];
         if (($latest['parameters']['dir'] ?? null) === 'app') {
             return $client->success(['dirs' => [], 'files' => [['file' => 'index.html', 'type' => 'file']]]);
