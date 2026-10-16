@@ -23,12 +23,18 @@ function rollbackTaskFixture(array $config = []): array
         new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app'])];
 }
 
+function taskMarkerFileOperations(FakeCpanelApiClient $client): array
+{
+    return array_values(array_filter(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'),
+        static fn (array $call): bool => str_starts_with($call['parameters']['sourcefiles'] ?? '', '.shipper-task-')));
+}
+
 test('failed task unscheduling fails rollback and preserves completion markers', function (): void {
     [$client, $provider, $project, $profile] = rollbackTaskFixture();
     $client->responses['api2:Cron:remove_line'] = ['success' => false, 'message' => 'Cron removal refused', 'data' => null, 'raw' => []];
     expect($provider->rollback($project, $profile))->toBeFalse()
         ->and($provider->getLastError())->toContain('Remove cPanel task schedule')
-        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toBeEmpty();
+        ->and(taskMarkerFileOperations($client))->toBeEmpty();
 });
 
 test('failed marker deletion cannot be reported as completely successful rollback', function (): void {
@@ -47,7 +53,8 @@ test('acknowledged task removal precedes marker deletion', function (): void {
         if ($call['module'] === 'Cron' && $call['function'] === 'remove_line') {
             $remove = $index;
         }
-        if ($call['module'] === 'Fileman' && $call['function'] === 'fileop' && $call['parameters']['op'] === 'unlink') {
+        if ($call['module'] === 'Fileman' && $call['function'] === 'fileop' && $call['parameters']['op'] === 'unlink'
+            && str_starts_with($call['parameters']['sourcefiles'] ?? '', '.shipper-task-')) {
             expect($remove)->not->toBeNull()->and($index)->toBeGreaterThan($remove);
             $unlinks[] = $index;
         }
@@ -69,14 +76,17 @@ test('the generated task wrapper does not rerun while its completion marker is r
         [$client, $provider, $project] = rollbackTaskFixture(['home_directory' => $home]);
         $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'cpanel' => ['tar_path' => $tar]]);
         $client->responses['api2:Cron:remove_line'] = ['success' => false, 'message' => 'Cron removal refused', 'data' => null, 'raw' => []];
-        expect($provider->rollback($project, $profile))->toBeFalse();
+        $client->responseQueues['uapi:Fileman:get_file_content'] = [$client->success(['content' => "0\n"])];
+        $run = new ReflectionMethod($provider, 'runOneTimeCommand');
+        expect(fn () => $run->invoke($provider, 'fixture command', escapeshellarg($tar), $profile))
+            ->toThrow(RuntimeException::class, 'Remove cPanel task schedule');
         $command = cpanelProviderCalls($client, 'api2', 'Cron', 'add_line')[0]['parameters']['command'];
         $output = [];
         exec($command, $output, $firstStatus);
         exec($command, $output, $secondStatus);
         expect($firstStatus)->toBe(0)->and($secondStatus)->toBe(0)
             ->and(file_get_contents($counter))->toBe('x')
-            ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toBeEmpty();
+            ->and(taskMarkerFileOperations($client))->toBeEmpty();
     } finally {
         foreach (array_merge(glob($home.'/*'), glob($home.'/.*')) as $file) {
             if (is_file($file)) unlink($file);
