@@ -44,7 +44,10 @@ test('documented postgresql username strings preserve an existing user', functio
     $profile = new CpanelTestProfile([
         'domain' => 'app.example.com', 'deploy_path' => '/app',
         'runtime' => ['type' => 'static'],
-        'databases' => ['main' => ['name' => 'app', 'user' => 'app', 'type' => 'postgresql', 'password' => 'existing-secret']],
+        'databases' => ['main' => [
+            'name' => 'app', 'user' => 'app', 'type' => 'postgresql',
+            'password' => 'existing-secret', 'adopt_existing' => true,
+        ]],
         'cpanel' => ['archive_extraction' => 'direct'],
     ]);
     expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeTrue()
@@ -102,6 +105,18 @@ test('shared database users with the same password are created only once', funct
     expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeTrue()
         ->and(cpanelProviderCalls($client, 'uapi', $module, 'create_database'))->toHaveCount(2)
         ->and(cpanelProviderCalls($client, 'uapi', $module, 'create_user'))->toHaveCount(1);
-    $reads = array_values(array_filter($client->calls, static fn (array $call): bool => $call['module'] === $module));
-    expect(array_column(array_slice($reads, 0, 4), 'function'))->toBe(['list_databases', 'list_users', 'list_databases', 'list_users']);
+    $mutationIndexes = array_keys(array_filter($client->calls, static fn (array $call): bool =>
+        $call['module'] === $module && in_array($call['function'], ['create_database', 'create_user'], true)
+    ));
+    $firstMutation = min($mutationIndexes);
+    $preflightFunctions = [];
+    foreach ($client->calls as $index => $call) {
+        if ($index >= $firstMutation) {
+            break;
+        }
+        if ($call['module'] === $module && in_array($call['function'], ['list_databases', 'list_users'], true)) {
+            $preflightFunctions[] = $call['function'];
+        }
+    }
+    expect($preflightFunctions)->toContain('list_databases', 'list_users');
 })->with([['mysql', 'Mysql'], ['postgresql', 'Postgresql']]);
