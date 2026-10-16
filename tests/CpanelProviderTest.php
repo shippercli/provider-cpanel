@@ -171,6 +171,7 @@ test('fileman can extract one archive through a monitored cpanel task', function
     ]);
     $client->responses['api2:Cron:add_line'] = $client->success([['linekey' => '83']]);
     $client->responses['uapi:Fileman:get_file_content'] = $client->success(['content' => "0\n"]);
+    $client->responseQueues['uapi:Fileman:get_file_content'] = [['success' => false, 'message' => 'No such file or directory', 'data' => null, 'raw' => []]];
 
     expect($provider->apply(
         new CpanelTestProject(cpanelProviderFixture()),
@@ -199,6 +200,7 @@ test('public web directory archives keep the application and publish its web roo
     ]);
     $client->responses['api2:Cron:add_line'] = $client->success([['linekey' => '84']]);
     $client->responses['uapi:Fileman:get_file_content'] = $client->success(['content' => "0\n"]);
+    $client->responseQueues['uapi:Fileman:get_file_content'] = [['success' => false, 'message' => 'No such file or directory', 'data' => null, 'raw' => []]];
     $project = new CpanelTestProject(
         cpanelProviderFixture([
             'composer.json' => '{}',
@@ -509,7 +511,7 @@ test('git deployment reports a redacted cpanel clone failure', function (): void
         ],
     ]);
     $client->responseQueues['uapi:Fileman:get_file_content'] = [
-        $client->success(),
+        ['success' => false, 'message' => 'No such file or directory', 'data' => null, 'raw' => []],
         $client->success([
             'content' => "Cloning...\nfatal: unable to access 'https://token@github.com/shippercli/sample.git': Could not resolve host: github.com\n",
         ]),
@@ -1318,3 +1320,24 @@ test('profile scoped explicit adoption allows deploying to an existing domain', 
     $manifest = json_decode($client->uploadedFiles['.shipper-manifest.json'], true);
     expect($manifest['domain']['created'])->toBeFalse();
 });
+
+test('manifest read and parse failures block mutations even with adoption enabled', function (string $operation): void {
+    $responses = [
+        ['success' => false, 'message' => 'Permission denied', 'data' => null, 'raw' => []],
+        ['success' => true, 'message' => 'OK', 'data' => null, 'raw' => []],
+        ['success' => true, 'message' => 'OK', 'data' => ['content' => ''], 'raw' => []],
+        ['success' => true, 'message' => 'OK', 'data' => ['content' => '{broken-secret-content'], 'raw' => []],
+        ['success' => true, 'message' => 'OK', 'data' => ['content' => '{}'], 'raw' => []],
+    ];
+    foreach ($responses as $response) {
+        $client = new FakeCpanelApiClient;
+        $client->responses['uapi:Fileman:get_file_content'] = $response;
+        $provider = cpanelProviderWithExistingDomain($client, ['adopt_existing' => true]);
+        $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app']);
+        expect($provider->{$operation}(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+            ->and($provider->getLastError())->toContain('manifest')->not->toContain('broken-secret-content')
+            ->and(array_map(static fn (array $call): string => $call['module'].':'.$call['function'], $client->calls))
+            ->toBe(['Variables:get_user_information', 'Fileman:get_file_content'])
+            ->and($client->uploadedFiles)->toBe([]);
+    }
+})->with(['apply', 'destroy']);

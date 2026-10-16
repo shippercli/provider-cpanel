@@ -1673,17 +1673,27 @@ final class CpanelProvider implements
             'to_charset' => 'utf-8',
         ]);
         if (! $result['success']) {
-            return null;
+            $message = \is_string($result['message'] ?? null) ? $result['message'] : '';
+            if (\preg_match('/(?:no such file|does not exist|not found)/i', $message) === 1) {
+                return null;
+            }
+            throw new RuntimeException('Unable to read the cPanel Shipper manifest; refusing to infer resource ownership.');
         }
 
         $content = $this->findValueAtKey($result['data'], 'content');
         if (! \is_string($content) || $content === '') {
-            return null;
+            throw new RuntimeException('The cPanel Shipper manifest response is empty or invalid; review it before retrying.');
         }
 
         $manifest = \json_decode($content, true);
 
-        return \is_array($manifest) ? $manifest : null;
+        if (! \is_array($manifest)
+            || ! \is_string($manifest['project'] ?? null) || $manifest['project'] === ''
+            || ! \is_string($manifest['profile'] ?? null) || $manifest['profile'] === '') {
+            throw new RuntimeException('The cPanel Shipper manifest is corrupt or lacks deployment identity; review it before retrying.');
+        }
+
+        return $manifest;
     }
 
     /**
