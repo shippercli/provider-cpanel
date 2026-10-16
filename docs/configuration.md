@@ -166,3 +166,17 @@ Long-tail cPanel operations can be attached to `before_apply`, `after_apply`,
 `before_destroy`, or `after_destroy` through `cpanel.operations`. Each
 operation selects `uapi`, `api2`, or `whm`, a module/function, and parameters.
 The authenticated account must expose and authorize the requested operation.
+
+### Manifest ownership booleans
+
+Stored ownership and deletion-consent flags must be JSON booleans. The provider
+rejects strings (including `"false"`), numbers, null, and collections before
+planning, applying, or destroying resources. This covers domain, alias,
+Passenger, Git repository, database/user, mail/forwarder, FTP, and DNS ownership,
+plus mail `delete_data` and FTP `delete_home` consent. Omitted flags remain
+unowned by default. Optional absent or null resource sections remain supported.
+
+If an existing manifest fails this check, review the actual resource ownership
+and correct the malformed value before retrying. Do not convert a string to
+`true` without ownership evidence. Type validation does not prove the manifest's
+authenticity or the identity of each recorded remote resource.

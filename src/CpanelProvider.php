@@ -1719,7 +1719,45 @@ final class CpanelProvider implements
             throw new RuntimeException('The cPanel Shipper manifest lacks a valid target domain; review and migrate its ownership evidence before retrying.');
         }
 
+        $this->validateManifestBooleans($manifest);
+
         return $manifest;
+    }
+
+    /** @param array<string, mixed> $manifest */
+    private function validateManifestBooleans(array $manifest): void
+    {
+        $sections = [
+            'domain' => ['created'],
+            'passenger' => ['created'],
+            'deployment' => ['repository_created'],
+            'aliases' => ['created'],
+            'databases' => ['database_created', 'user_created'],
+            'email_accounts' => ['created', 'delete_data'],
+            'email_forwarders' => ['created'],
+            'ftp_accounts' => ['created', 'delete_home'],
+            'dns_records' => ['created'],
+        ];
+        foreach ($sections as $section => $flags) {
+            if (! isset($manifest[$section])) {
+                continue;
+            }
+            $data = $manifest[$section];
+            if (! \is_array($data)) {
+                throw new RuntimeException("Invalid cPanel manifest ownership section {$section}");
+            }
+            $entries = \in_array($section, ['domain', 'passenger', 'deployment'], true) ? [$data] : $data;
+            foreach ($entries as $entry) {
+                if (! \is_array($entry)) {
+                    throw new RuntimeException("Invalid cPanel manifest ownership entry {$section}");
+                }
+                foreach ($flags as $flag) {
+                    if (\array_key_exists($flag, $entry) && ! \is_bool($entry[$flag])) {
+                        throw new RuntimeException("cPanel manifest {$section}.{$flag} must be a boolean");
+                    }
+                }
+            }
+        }
     }
 
     /**
