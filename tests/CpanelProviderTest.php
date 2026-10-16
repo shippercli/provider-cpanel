@@ -1436,3 +1436,23 @@ test('manifest read and parse failures block mutations even with adoption enable
             ->and($client->uploadedFiles)->toBe([]);
     }
 })->with(['apply', 'destroy']);
+
+
+test('shared database users are created only once even when inventory reads lag within apply', function (string $type, string $module): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses["uapi:{$module}:list_databases"] = $client->success([]);
+    $client->responses["uapi:{$module}:list_users"] = $client->success([]);
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $project = new CpanelTestProject(cpanelProviderFixture());
+    $profile = new CpanelTestProfile([
+        'domain' => 'app.example.com', 'deploy_path' => '/app',
+        'databases' => [
+            'first' => ['type' => $type, 'name' => 'first', 'user' => 'shared', 'password' => 'shared-secret'],
+            'second' => ['type' => $type, 'name' => 'second', 'user' => 'shared', 'password' => 'shared-secret'],
+        ],
+    ]);
+
+    expect($provider->apply($project, $profile))->toBeTrue()
+        ->and(cpanelProviderCalls($client, 'uapi', $module, 'create_database'))->toHaveCount(2)
+        ->and(cpanelProviderCalls($client, 'uapi', $module, 'create_user'))->toHaveCount(1);
+})->with([['mysql', 'Mysql'], ['postgresql', 'Postgresql']]);

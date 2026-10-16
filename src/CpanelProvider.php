@@ -959,12 +959,14 @@ final class CpanelProvider implements
     {
         $resources = [];
         $environment = [];
+        $createdUsers = [];
 
         foreach ($this->databaseConfigs($project, $profile) as $index => $database) {
             $type = $database['type'];
             $name = $this->qualifiedDatabaseName($database['name']);
             $user = $database['user'] === '' ? '' : $this->qualifiedDatabaseName($database['user']);
             $password = $database['password'];
+            $userKey = $type.':'.$user;
 
             if ($type === 'mysql') {
                 $databaseExisted = $this->mysqlDatabaseExists($name);
@@ -976,7 +978,7 @@ final class CpanelProvider implements
                     );
                 }
 
-                $userExisted = $user === '' ? true : $this->mysqlUserExists($user);
+                $userExisted = $user === '' ? true : ($this->mysqlUserExists($user) || isset($createdUsers[$userKey]));
                 if ($databaseExisted && $user !== '' && ! $userExisted && $ownershipState === null) {
                     throw new RuntimeException("Refusing to create a user for existing MySQL database {$name} without explicit adoption consent.");
                 }
@@ -985,6 +987,7 @@ final class CpanelProvider implements
                         'name' => $user,
                         'password' => $password,
                     ]), "Create MySQL user {$user}");
+                    $createdUsers[$userKey] = true;
                 } elseif ($user !== '' && $password !== '' && $this->boolDatabaseOption($database, 'update_password', false)) {
                     $this->required($this->api()->uapi('Mysql', 'set_password', [
                         'user' => $user,
@@ -1009,7 +1012,7 @@ final class CpanelProvider implements
                     );
                 }
 
-                $userExisted = $user === '' ? true : $this->postgresUserExists($user);
+                $userExisted = $user === '' ? true : ($this->postgresUserExists($user) || isset($createdUsers[$userKey]));
                 if ($databaseExisted && $user !== '' && ! $userExisted && $ownershipState === null) {
                     throw new RuntimeException("Refusing to create a user for existing PostgreSQL database {$name} without explicit adoption consent.");
                 }
@@ -1018,6 +1021,7 @@ final class CpanelProvider implements
                         'name' => $user,
                         'password' => $password,
                     ]), "Create PostgreSQL user {$user}");
+                    $createdUsers[$userKey] = true;
                 }
 
                 if ($user !== '' && $ownershipState !== null) {
