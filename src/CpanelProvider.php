@@ -98,6 +98,12 @@ final class CpanelProvider implements
             $errors[] = 'cPanel password or API token is required';
         }
 
+        try {
+            $this->assertDatabasePasswordOptions($profile);
+        } catch (RuntimeException $exception) {
+            $errors[] = $exception->getMessage();
+        }
+
         if ($this->projectPath($project) === '') {
             $errors[] = 'Project path is required';
         }
@@ -123,12 +129,6 @@ final class CpanelProvider implements
 
         if ($method === 'git' && $this->repositoryUrl($project) === '') {
             $errors[] = 'Repository URL is required for cPanel Git deployment';
-        }
-
-        try {
-            $this->assertDatabasePasswordOptions($profile);
-        } catch (RuntimeException $exception) {
-            $errors[] = $exception->getMessage();
         }
 
         foreach ($this->databaseConfigs($project, $profile) as $database) {
@@ -171,10 +171,10 @@ final class CpanelProvider implements
 
     public function plan(object $project, object $profile): array
     {
-        $this->assertDatabasePasswordOptions($profile);
         $domain = $this->domain($profile);
         $method = $this->deploymentMethod($project, $profile);
         $runtime = $this->runtimeConfig($project, $profile);
+        $this->assertDatabasePasswordOptions($profile);
         $accountResources = $this->accountResourceConfigs($project, $profile);
         $actions = [
             'Discover enabled cPanel account features',
@@ -271,8 +271,8 @@ final class CpanelProvider implements
         $this->lastError = '';
 
         try {
-            $this->assertDatabasePasswordOptions($profile);
             $context = $this->context($project, $profile);
+            $this->assertDatabasePasswordOptions($profile);
             $previousManifest = $this->readManifest($profile);
             if ($previousManifest !== null && ! $this->manifestMatches($previousManifest, $project, $profile)) {
                 throw new RuntimeException(
