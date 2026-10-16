@@ -173,6 +173,21 @@ final class CpanelProvider implements
         $method = $this->deploymentMethod($project, $profile);
         $runtime = $this->runtimeConfig($project, $profile);
         $accountResources = $this->accountResourceConfigs($project, $profile);
+        $blocked = null;
+        try {
+            $manifest = $this->readManifest($profile);
+            if ($manifest !== null && ! $this->manifestMatches($manifest, $project, $profile)) {
+                $blocked = 'The cPanel Shipper manifest belongs to another deployment.';
+            } elseif ($manifest === null) {
+                $inventory = $this->required($this->api()->uapi('DomainInfo', 'domains_data', ['format' => 'hash']), 'Inspect cPanel domain ownership');
+                $adopt = $this->cpanelOptions($profile)['adopt_existing'] ?? $this->config['adopt_existing'] ?? false;
+                if ($this->classifyDomain($inventory, $domain) !== null && $adopt !== true) {
+                    $blocked = 'An existing cPanel domain requires explicit adopt_existing: true after ownership review.';
+                }
+            }
+        } catch (\Throwable) {
+            $blocked = 'Unable to verify cPanel deployment ownership. Review the manifest and API access before deployment.';
+        }
         $actions = [
             'Discover enabled cPanel account features',
             "Create or find domain: {$domain}",
@@ -258,8 +273,11 @@ final class CpanelProvider implements
             'email_account_count' => \count($accountResources['email_accounts']),
             'email_forwarder_count' => \count($accountResources['email_forwarders']),
             'ftp_account_count' => \count($accountResources['ftp_accounts']),
-            'actions' => $actions,
-            'note' => 'Operations are authorized and feature-gated by the target cPanel account.',
+            'blocked' => $blocked !== null,
+            'actions' => $blocked === null ? $actions : ['BLOCKED: '.$blocked],
+            'note' => $blocked === null
+                ? 'Account features, resource prerequisites, and ownership are rechecked during apply.'
+                : 'No deployment actions are authorized by this plan.',
         ];
     }
 

@@ -77,3 +77,13 @@ The implementation targets cPanel account UAPI, the remaining operations that
 only exist in cPanel API 2, and optional privileged WHM API operations. See the
 [capability model](docs/capabilities.md) for availability rules and the
 [operations guide](docs/operations.md) for rollback and cleanup safety.
+
+### Plan ownership inspection
+
+Planning reads the deployment manifest and, when no manifest exists, domain
+inventory. It blocks a mismatched/corrupt/unreadable manifest or an existing
+domain without the explicit reviewed `adopt_existing: true` setting. Planning
+performs no writes and returns `blocked: true` with one public reason when
+ownership cannot be established. CLI enforcement is proposed in
+shippercli/cli#154. Account-feature and other resource prerequisites remain
+subject to checks during apply; an unblocked plan does not certify live readiness.
