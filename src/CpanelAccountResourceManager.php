@@ -31,6 +31,7 @@ final class CpanelAccountResourceManager
      */
     public function reconcile(array $configured, array $previous): array
     {
+        $this->assertDnsOwnershipVersion($previous);
         return [
             'dns_records' => $this->reconcileDnsRecords(
                 $configured['dns_records'],
@@ -54,6 +55,7 @@ final class CpanelAccountResourceManager
     /** @param array<string, mixed> $manifest */
     public function destroy(array $manifest): void
     {
+        $this->assertDnsOwnershipVersion($manifest);
         foreach ($this->manifestResources($manifest, 'email_forwarders') as $forwarder) {
             if ((bool) ($forwarder['created'] ?? false)) {
                 $this->deleteEmailForwarder($forwarder);
@@ -75,6 +77,16 @@ final class CpanelAccountResourceManager
         foreach ($this->manifestResources($manifest, 'dns_records') as $record) {
             if ((bool) ($record['created'] ?? false)) {
                 $this->deleteDnsRecord($record);
+            }
+        }
+    }
+
+    /** @param array<string, mixed> $manifest */
+    private function assertDnsOwnershipVersion(array $manifest): void
+    {
+        foreach ($this->manifestResources($manifest, 'dns_records') as $record) {
+            if ((bool) ($record['created'] ?? false) && ($record['data_hash_version'] ?? null) !== 2) {
+                throw new RuntimeException('Legacy DNS ownership requires review before account resource changes');
             }
         }
     }
@@ -456,7 +468,7 @@ final class CpanelAccountResourceManager
     /**
      * @param array<string, mixed> $record
      *
-     * @return array{zone: string, name: string, type: string, data_hash: string, ttl: int, created: bool}
+     * @return array{zone: string, name: string, type: string, data_hash: string, data_hash_version: int, ttl: int, created: bool}
      */
     private function dnsState(array $record, bool $created): array
     {
@@ -469,6 +481,7 @@ final class CpanelAccountResourceManager
             'name' => $name,
             'type' => $type,
             'data_hash' => $this->dnsDataHash($type, $record['data']),
+            'data_hash_version' => 2,
             'ttl' => (int) $record['ttl'],
             'created' => $created,
         ];
@@ -552,7 +565,17 @@ final class CpanelAccountResourceManager
      */
     private function matchingDnsRecord(array $records, array $expected): ?array
     {
-        return $this->matchingResource($records, $expected, ['name', 'type', 'data_hash']);
+        $matches = [];
+        foreach ($records as $record) {
+            if ($this->matchingResource([$record], $expected, ['name', 'type', 'data_hash']) !== null) {
+                $matches[] = $record;
+            }
+        }
+        if (\count($matches) > 1) {
+            throw new RuntimeException('Ambiguous cPanel DNS record ownership');
+        }
+
+        return $matches[0] ?? null;
     }
 
     /**
@@ -608,10 +631,7 @@ final class CpanelAccountResourceManager
     /** @param array<int, string> $data */
     private function dnsDataHash(string $type, array $data): string
     {
-        $normalized = \array_values(\array_map(
-            static fn (string $value): string => \trim($value),
-            $data,
-        ));
+        $normalized = \array_values($data);
         $domainIndexes = match ($type) {
             'CNAME', 'NS', 'PTR' => [0],
             'MX' => [1],
@@ -624,7 +644,7 @@ final class CpanelAccountResourceManager
             }
         }
 
-        return \hash('sha256', \json_encode($normalized, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+        return \hash('sha256', \json_encode(\array_map('base64_encode', $normalized), JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
     }
 
     private function normalizeDnsName(string $name, string $zone = ''): string

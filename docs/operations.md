@@ -20,6 +20,11 @@ entire status command fail.
 `Stats/get_site_errors`. The account must expose the domain statistics feature.
 Use `--lines` from `1` through `5000`.
 
+## DNS ownership migration
+
+Read the [exact DNS ownership and migration guide](dns-ownership.md) before
+upgrading a deployment whose manifest owns DNS records.
+
 ## Rollback
 
 Rollback requires a matching Shipper manifest and at least one deployment
