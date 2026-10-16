@@ -33,6 +33,13 @@ cPanel Git repositories must not share the domain document root. Keep
 `cpanel.repository_root` separate from `deploy_path`, and commit a `.cpanel.yml`
 file that copies the intended deployment files into the document root.
 
+An existing domain without a matching Shipper manifest requires explicit
+adoption consent. Set `cpanel.adopt_existing` to a mapping containing the exact
+project name, profile name, and lowercase domain. A plan then names that domain
+as an adoption action, and the manifest records `ownership_state: adopted` so
+destroy preserves the domain. Consent for another project, profile, or domain
+does not authorize adoption.
+
 Private repositories require Git credentials to be configured on the cPanel
 account before deployment. Prefer short-lived credentials or a credential helper,
 and remove temporary credentials after the deployment completes. Shipper never
@@ -65,11 +72,21 @@ databases:
     user: app_production
     password: "${DB_PASSWORD}"
     privileges: ALL PRIVILEGES
+    adopt_existing: false
+    update_password: false
 ```
 
 `mysql` and `postgresql` are supported. cPanel may prefix database and user
 names with the account username. Shipper injects the resolved names into the
-deployment environment.
+deployment environment. Plan blocks an existing database unless its exact
+profile declaration sets `adopt_existing: true`; the plan then names the
+database being adopted. Apply rechecks this before hooks or resource mutations.
+The manifest persists whether Shipper created or adopted each database. A
+previously adopted database remains reusable on later applies and is preserved
+by destroy. Only databases recorded as created by Shipper are eligible for
+database deletion. Existing database user passwords change only when
+`update_password: true` is explicitly set; both consent options must be actual
+booleans.
 
 ## Releases
 
@@ -166,3 +183,17 @@ Long-tail cPanel operations can be attached to `before_apply`, `after_apply`,
 `before_destroy`, or `after_destroy` through `cpanel.operations`. Each
 operation selects `uapi`, `api2`, or `whm`, a module/function, and parameters.
 The authenticated account must expose and authorize the requested operation.
+
+### Manifest ownership booleans
+
+Stored ownership and deletion-consent flags must be JSON booleans. The provider
+rejects strings (including `"false"`), numbers, null, and collections before
+planning, applying, or destroying resources. This covers domain, alias,
+Passenger, Git repository, database/user, mail/forwarder, FTP, and DNS ownership,
+plus mail `delete_data` and FTP `delete_home` consent. Omitted flags remain
+unowned by default. Optional absent or null resource sections remain supported.
+
+If an existing manifest fails this check, review the actual resource ownership
+and correct the malformed value before retrying. Do not convert a string to
+`true` without ownership evidence. Type validation does not prove the manifest's
+authenticity or the identity of each recorded remote resource.

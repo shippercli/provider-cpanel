@@ -85,6 +85,10 @@ final class CpanelProvider implements
     public function validate(object $project, object $profile): array
     {
         $errors = [];
+        $adoption = $this->adoptionConsent($profile);
+        if ($adoption !== null && $adoption !== false && ! $this->adoptionConsentMatches($adoption, $project, $profile)) {
+            $errors[] = 'cPanel adopt_existing must name the exact project, profile, and domain being adopted.';
+        }
 
         if ($this->stringConfig('host') === '') {
             $errors[] = 'cPanel host is required';
@@ -129,6 +133,12 @@ final class CpanelProvider implements
             if (($database['user'] ?? '') !== '' && ($database['password'] ?? '') === '') {
                 $errors[] = "Database password is required for cPanel database user: {$database['user']}";
             }
+            if (array_key_exists('adopt_existing', $database) && ! is_bool($database['adopt_existing'])) {
+                $errors[] = "cPanel database adopt_existing must be a boolean: {$database['name']}";
+            }
+            if (array_key_exists('update_password', $database) && ! is_bool($database['update_password'])) {
+                $errors[] = 'Database update_password must be a boolean';
+            }
         }
 
         $accountResources = $this->accountResourceConfigs($project, $profile);
@@ -160,7 +170,7 @@ final class CpanelProvider implements
             }
         }
 
-        return $errors;
+        return array_values(array_unique($errors));
     }
 
     public function plan(object $project, object $profile): array
@@ -169,9 +179,53 @@ final class CpanelProvider implements
         $method = $this->deploymentMethod($project, $profile);
         $runtime = $this->runtimeConfig($project, $profile);
         $accountResources = $this->accountResourceConfigs($project, $profile);
+        $blocked = null;
+        $domainDisposition = 'new';
+        $databaseDispositions = [];
+        foreach ($this->databaseConfigs($project, $profile) as $database) {
+            if (! is_bool($database['adopt_existing']) || ! is_bool($database['update_password'])) {
+                $blocked = 'cPanel database adoption and password-update options must be booleans.';
+                break;
+            }
+        }
+        try {
+            if ($blocked !== null) {
+                throw new RuntimeException($blocked);
+            }
+            $manifest = $this->readManifest($profile);
+            if ($manifest !== null && ! $this->manifestMatches($manifest, $project, $profile)) {
+                $blocked = 'The cPanel Shipper manifest belongs to another deployment.';
+            } elseif ($manifest !== null) {
+                $domainDisposition = ($manifest['domain']['ownership_state'] ?? null) === 'adopted'
+                    || ($manifest['domain']['created'] ?? null) === false
+                    ? 'adopted'
+                    : 'created';
+            } elseif ($manifest === null) {
+                $inventory = $this->required($this->api()->uapi('DomainInfo', 'domains_data', ['format' => 'hash']), 'Inspect cPanel domain ownership');
+                $inventory = $this->validateDomainInventory($inventory);
+                $existingDomain = $this->classifyDomain($inventory, $domain) !== null;
+                $authorized = $this->adoptionConsentMatches($this->adoptionConsent($profile), $project, $profile);
+                if ($existingDomain && ! $authorized) {
+                    $blocked = 'An existing cPanel domain requires explicit adoption consent naming this project, profile, and domain.';
+                }
+                $domainDisposition = $existingDomain ? 'adopt' : 'new';
+            }
+            if ($blocked === null) {
+                $databaseDispositions = $this->inspectDatabaseAdoptionPlan($project, $profile, $manifest);
+            }
+        } catch (\Throwable $exception) {
+            $blocked = str_contains($exception->getMessage(), 'requires adopt_existing: true')
+                ? $exception->getMessage()
+                : 'Unable to verify cPanel deployment ownership. Review the manifest and API access before deployment.';
+        }
         $actions = [
             'Discover enabled cPanel account features',
-            "Create or find domain: {$domain}",
+            match ($domainDisposition) {
+                'adopt' => "Adopt existing cPanel domain: {$domain}",
+                'adopted' => "Use previously adopted cPanel domain: {$domain}",
+                'created' => "Use Shipper-created cPanel domain: {$domain}",
+                default => "Create cPanel domain: {$domain}",
+            },
         ];
 
         if ($this->boolCpanelOption($profile, 'backup_before_deploy', false)) {
@@ -201,8 +255,13 @@ final class CpanelProvider implements
             $actions[] = "Register or update {$runtime['type']} Passenger application";
         }
 
-        foreach ($this->databaseConfigs($project, $profile) as $database) {
-            $actions[] = "Create or find {$database['type']} database: {$database['name']}";
+        foreach ($databaseDispositions as $disposition) {
+            $actions[] = match ($disposition['action']) {
+                'adopt' => "Adopt existing {$disposition['type']} database: {$disposition['name']}",
+                'adopted' => "Reuse previously adopted {$disposition['type']} database: {$disposition['name']}",
+                'created' => "Reuse Shipper-created {$disposition['type']} database: {$disposition['name']}",
+                default => "Create {$disposition['type']} database: {$disposition['name']}",
+            };
         }
 
         $environment = $this->environmentVariables($project, $profile);
@@ -254,8 +313,11 @@ final class CpanelProvider implements
             'email_account_count' => \count($accountResources['email_accounts']),
             'email_forwarder_count' => \count($accountResources['email_forwarders']),
             'ftp_account_count' => \count($accountResources['ftp_accounts']),
-            'actions' => $actions,
-            'note' => 'Operations are authorized and feature-gated by the target cPanel account.',
+            'blocked' => $blocked !== null,
+            'actions' => $blocked === null ? $actions : ['BLOCKED: '.$blocked],
+            'note' => $blocked === null
+                ? 'Account features, resource prerequisites, and ownership are rechecked during apply.'
+                : 'No deployment actions are authorized by this plan.',
         ];
     }
 
@@ -264,6 +326,10 @@ final class CpanelProvider implements
         $this->lastError = '';
 
         try {
+            $validationErrors = $this->validate($project, $profile);
+            if ($validationErrors !== []) {
+                throw new RuntimeException(implode('; ', $validationErrors));
+            }
             $context = $this->context($project, $profile);
             $previousManifest = $this->readManifest($profile);
             if ($previousManifest !== null && ! $this->manifestMatches($previousManifest, $project, $profile)) {
@@ -272,19 +338,34 @@ final class CpanelProvider implements
                 );
             }
 
+            // Database adoption is resolved before hooks, domain reconciliation,
+            // uploads, or any other provider mutation.
+            $this->inspectDatabaseAdoptionPlan($project, $profile, $previousManifest);
+
+            $domainInventory = null;
+            if ($previousManifest === null) {
+                $domainInventory = $this->required($this->api()->uapi('DomainInfo', 'domains_data', ['format' => 'hash']), 'Inspect cPanel domain ownership');
+                $domainInventory = $this->validateDomainInventory($domainInventory);
+                $existing = $this->classifyDomain($domainInventory, $this->domain($profile)) !== null;
+                if ($existing && ! $this->adoptionConsentMatches($this->adoptionConsent($profile), $project, $profile)) {
+                    throw new RuntimeException('Refusing cPanel apply to an existing domain without explicit adoption consent for this project, profile, and domain.');
+                }
+            }
+
             $this->runCustomOperations($profile, 'before_apply', $context);
             $features = $this->required($this->api()->uapi('Features', 'list_features'), 'Discover cPanel features');
-            $domainState = $this->ensureDomain($profile);
+            $domainState = $this->ensureDomain($profile, $domainInventory);
             $domainState = $this->preserveOwnership(
                 $domainState,
                 $previousManifest['domain'] ?? null,
                 ['domain', 'type'],
                 ['created'],
             );
+            $domainState['ownership_state'] = $domainState['created'] ? 'created' : 'adopted';
             $runtime = $this->runtimeConfig($project, $profile);
 
             $this->configurePhp($domainState['domain'], $runtime, $profile);
-            $databaseState = $this->ensureDatabases($project, $profile);
+            $databaseState = $this->ensureDatabases($project, $profile, $previousManifest);
             $databaseState['resources'] = $this->preserveDatabaseOwnership(
                 $databaseState['resources'],
                 $previousManifest['databases'] ?? null,
@@ -388,8 +469,7 @@ final class CpanelProvider implements
                 throw new RuntimeException('Refusing cPanel destroy because no matching Shipper manifest exists');
             }
 
-            if (($manifest['project'] ?? null) !== $this->projectName($project)
-                || ($manifest['profile'] ?? null) !== $this->profileName($profile)) {
+            if (! $this->manifestMatches($manifest, $project, $profile)) {
                 throw new RuntimeException('Refusing cPanel destroy because the Shipper manifest belongs to another deployment');
             }
 
@@ -526,15 +606,16 @@ final class CpanelProvider implements
     }
 
     /**
-     * @return array{domain: string, type: string, created: bool, primary_domain: string}
+     * @return array{domain: string, type: string, created: bool, ownership_state: string, primary_domain: string}
      */
-    private function ensureDomain(object $profile): array
+    private function ensureDomain(object $profile, mixed $domains = null): array
     {
         $domain = $this->domain($profile);
-        $domains = $this->required(
+        $domains ??= $this->required(
             $this->api()->uapi('DomainInfo', 'domains_data', ['format' => 'hash']),
             'List cPanel domains',
         );
+        $domains = $this->validateDomainInventory($domains);
         $existingType = $this->classifyDomain($domains, $domain);
 
         if ($existingType !== null) {
@@ -542,6 +623,7 @@ final class CpanelProvider implements
                 'domain' => $domain,
                 'type' => $existingType,
                 'created' => false,
+                'ownership_state' => 'adopted',
                 'primary_domain' => $this->primaryDomain($domains),
             ];
         }
@@ -592,6 +674,7 @@ final class CpanelProvider implements
             'domain' => $domain,
             'type' => $type,
             'created' => true,
+            'ownership_state' => 'created',
             'primary_domain' => $primaryDomain,
         ];
     }
@@ -869,21 +952,25 @@ final class CpanelProvider implements
     }
 
     /**
+     * @param array<string, mixed>|null $previousManifest
      * @return array{resources: array<int, array<string, mixed>>, environment: array<string, string>}
      */
-    private function ensureDatabases(object $project, object $profile): array
+    private function ensureDatabases(object $project, object $profile, ?array $previousManifest = null): array
     {
         $resources = [];
         $environment = [];
+        $createdUsers = [];
 
         foreach ($this->databaseConfigs($project, $profile) as $index => $database) {
             $type = $database['type'];
             $name = $this->qualifiedDatabaseName($database['name']);
             $user = $database['user'] === '' ? '' : $this->qualifiedDatabaseName($database['user']);
             $password = $database['password'];
+            $userKey = $type.':'.$user;
 
             if ($type === 'mysql') {
                 $databaseExisted = $this->mysqlDatabaseExists($name);
+                $ownershipState = $this->resolveDatabaseOwnershipState($database, $type, $name, $databaseExisted, $previousManifest);
                 if (! $databaseExisted) {
                     $this->required(
                         $this->api()->uapi('Mysql', 'create_database', ['name' => $name]),
@@ -891,12 +978,16 @@ final class CpanelProvider implements
                     );
                 }
 
-                $userExisted = $user === '' ? true : $this->mysqlUserExists($user);
+                $userExisted = $user === '' ? true : ($this->mysqlUserExists($user) || isset($createdUsers[$userKey]));
+                if ($databaseExisted && $user !== '' && ! $userExisted && $ownershipState === null) {
+                    throw new RuntimeException("Refusing to create a user for existing MySQL database {$name} without explicit adoption consent.");
+                }
                 if ($user !== '' && ! $userExisted) {
                     $this->required($this->api()->uapi('Mysql', 'create_user', [
                         'name' => $user,
                         'password' => $password,
                     ]), "Create MySQL user {$user}");
+                    $createdUsers[$userKey] = true;
                 } elseif ($user !== '' && $password !== '' && $this->boolDatabaseOption($database, 'update_password', false)) {
                     $this->required($this->api()->uapi('Mysql', 'set_password', [
                         'user' => $user,
@@ -904,7 +995,7 @@ final class CpanelProvider implements
                     ]), "Update MySQL user {$user}");
                 }
 
-                if ($user !== '') {
+                if ($user !== '' && $ownershipState !== null) {
                     $this->required($this->api()->uapi('Mysql', 'set_privileges_on_database', [
                         'user' => $user,
                         'database' => $name,
@@ -913,6 +1004,7 @@ final class CpanelProvider implements
                 }
             } elseif ($type === 'postgresql') {
                 $databaseExisted = $this->postgresDatabaseExists($name);
+                $ownershipState = $this->resolveDatabaseOwnershipState($database, $type, $name, $databaseExisted, $previousManifest);
                 if (! $databaseExisted) {
                     $this->required(
                         $this->api()->uapi('Postgresql', 'create_database', ['name' => $name]),
@@ -920,15 +1012,19 @@ final class CpanelProvider implements
                     );
                 }
 
-                $userExisted = $user === '' ? true : $this->postgresUserExists($user);
+                $userExisted = $user === '' ? true : ($this->postgresUserExists($user) || isset($createdUsers[$userKey]));
+                if ($databaseExisted && $user !== '' && ! $userExisted && $ownershipState === null) {
+                    throw new RuntimeException("Refusing to create a user for existing PostgreSQL database {$name} without explicit adoption consent.");
+                }
                 if ($user !== '' && ! $userExisted) {
                     $this->required($this->api()->uapi('Postgresql', 'create_user', [
                         'name' => $user,
                         'password' => $password,
                     ]), "Create PostgreSQL user {$user}");
+                    $createdUsers[$userKey] = true;
                 }
 
-                if ($user !== '') {
+                if ($user !== '' && $ownershipState !== null) {
                     $this->required($this->api()->uapi('Postgresql', 'grant_all_privileges', [
                         'user' => $user,
                         'database' => $name,
@@ -943,6 +1039,7 @@ final class CpanelProvider implements
                 'name' => $name,
                 'user' => $user,
                 'database_created' => ! $databaseExisted,
+                'database_ownership_state' => $ownershipState,
                 'user_created' => ! $userExisted,
             ];
 
@@ -1661,17 +1758,77 @@ final class CpanelProvider implements
             'to_charset' => 'utf-8',
         ]);
         if (! $result['success']) {
-            return null;
+            $message = \is_string($result['message'] ?? null) ? $result['message'] : '';
+            if (\preg_match('/(?:no such file|does not exist|not found)/i', $message) === 1) {
+                return null;
+            }
+            throw new RuntimeException('Unable to read the cPanel Shipper manifest; refusing to infer resource ownership.');
         }
 
         $content = $this->findValueAtKey($result['data'], 'content');
         if (! \is_string($content) || $content === '') {
-            return null;
+            throw new RuntimeException('The cPanel Shipper manifest response is empty or invalid; review it before retrying.');
         }
 
         $manifest = \json_decode($content, true);
 
-        return \is_array($manifest) ? $manifest : null;
+        if (! \is_array($manifest)
+            || ! \is_string($manifest['project'] ?? null) || $manifest['project'] === ''
+            || ! \is_string($manifest['profile'] ?? null) || $manifest['profile'] === '') {
+            throw new RuntimeException('The cPanel Shipper manifest is corrupt or lacks deployment identity; review it before retrying.');
+        }
+        if (! \is_array($manifest['domain'] ?? null)
+            || ! \is_string($manifest['domain']['domain'] ?? null)
+            || \trim($manifest['domain']['domain']) === '') {
+            throw new RuntimeException('The cPanel Shipper manifest lacks a valid target domain; review and migrate its ownership evidence before retrying.');
+        }
+        $domainState = $manifest['domain'];
+        if (\array_key_exists('ownership_state', $domainState)
+            && (! \in_array($domainState['ownership_state'], ['created', 'adopted'], true)
+                || (\array_key_exists('created', $domainState)
+                    && $domainState['created'] !== ($domainState['ownership_state'] === 'created')))) {
+            throw new RuntimeException('The cPanel manifest domain ownership state is inconsistent; review it before retrying.');
+        }
+
+        $this->validateManifestBooleans($manifest);
+
+        return $manifest;
+    }
+
+    /** @param array<string, mixed> $manifest */
+    private function validateManifestBooleans(array $manifest): void
+    {
+        $sections = [
+            'domain' => ['created'],
+            'passenger' => ['created'],
+            'deployment' => ['repository_created'],
+            'aliases' => ['created'],
+            'databases' => ['database_created', 'user_created'],
+            'email_accounts' => ['created', 'delete_data'],
+            'email_forwarders' => ['created'],
+            'ftp_accounts' => ['created', 'delete_home'],
+            'dns_records' => ['created'],
+        ];
+        foreach ($sections as $section => $flags) {
+            if (! isset($manifest[$section])) {
+                continue;
+            }
+            $data = $manifest[$section];
+            if (! \is_array($data)) {
+                throw new RuntimeException("Invalid cPanel manifest ownership section {$section}");
+            }
+            $entries = \in_array($section, ['domain', 'passenger', 'deployment'], true) ? [$data] : $data;
+            foreach ($entries as $entry) {
+                if (! \is_array($entry)) {
+                    throw new RuntimeException("Invalid cPanel manifest ownership entry {$section}");
+                }
+                foreach ($flags as $flag) {
+                    if (\array_key_exists($flag, $entry) && ! \is_bool($entry[$flag])) {
+                        throw new RuntimeException("cPanel manifest {$section}.{$flag} must be a boolean");
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -1680,7 +1837,8 @@ final class CpanelProvider implements
     private function manifestMatches(array $manifest, object $project, object $profile): bool
     {
         return ($manifest['project'] ?? null) === $this->projectName($project)
-            && ($manifest['profile'] ?? null) === $this->profileName($profile);
+            && ($manifest['profile'] ?? null) === $this->profileName($profile)
+            && ($manifest['domain']['domain'] ?? null) === $this->domain($profile);
     }
 
     /**
@@ -2508,7 +2666,7 @@ final class CpanelProvider implements
     }
 
     /**
-     * @return array<int, array{name: string, user: string, type: string, password: string, privileges: string, update_password?: bool}>
+     * @return array<int, array{name: string, user: string, type: string, password: string, privileges: string, adopt_existing: mixed, update_password: mixed}>
      */
     private function databaseConfigs(object $project, object $profile): array
     {
@@ -2527,7 +2685,8 @@ final class CpanelProvider implements
                     'type' => \strtolower($this->arrayString($database, 'type', 'mysql')),
                     'password' => $this->arrayString($database, 'password', $this->stringConfig('database_password')),
                     'privileges' => $this->privilegeString($database['privileges'] ?? 'ALL PRIVILEGES'),
-                    'update_password' => (bool) ($database['update_password'] ?? false),
+                    'adopt_existing' => $database['adopt_existing'] ?? false,
+                    'update_password' => $database['update_password'] ?? false,
                 ];
             }
 
@@ -2550,6 +2709,8 @@ final class CpanelProvider implements
                 'type' => \strtolower($this->objectMethodString($database, 'type', 'mysql')),
                 'password' => $this->stringConfig('database_password'),
                 'privileges' => 'ALL PRIVILEGES',
+                'adopt_existing' => false,
+                'update_password' => false,
             ];
         }
 
@@ -2930,6 +3091,27 @@ final class CpanelProvider implements
         return $primary;
     }
 
+    /** @return array<string, mixed> */
+    private function validateDomainInventory(mixed $data): array
+    {
+        $keys = ['main_domain', 'primary_domain', 'addon_domains', 'sub_domains', 'parked_domains'];
+        if (! \is_array($data) || \array_intersect($keys, \array_keys($data)) === []) {
+            throw new RuntimeException('cPanel returned an invalid domain inventory; refusing to infer domain absence.');
+        }
+        foreach ($keys as $key) {
+            if (! \array_key_exists($key, $data)) continue;
+            $value = $data[$key];
+            if (\in_array($key, ['main_domain', 'primary_domain'], true)) {
+                if ((\is_string($value) && \trim($value) !== '') || (\is_array($value) && $value !== [])) continue;
+            } elseif (\is_array($value)) {
+                continue;
+            }
+            throw new RuntimeException('cPanel returned malformed domain inventory fields; refusing to infer domain absence.');
+        }
+
+        return $data;
+    }
+
     private function classifyDomain(mixed $data, string $domain, string $key = ''): ?string
     {
         if (! \is_array($data)) {
@@ -2988,6 +3170,57 @@ final class CpanelProvider implements
 
         return $this->containsValueAtKey($data, 'user', $name)
             || $this->containsValueAtKey($data, 'name', $name);
+    }
+
+    /**
+     * @param array<string, mixed>|null $manifest
+     * @return array<int, array{type: string, name: string, action: string, ownership_state: string}>
+     */
+    private function inspectDatabaseAdoptionPlan(object $project, object $profile, ?array $manifest): array
+    {
+        $dispositions = [];
+        foreach ($this->databaseConfigs($project, $profile) as $database) {
+            $type = $database['type'];
+            $name = $this->qualifiedDatabaseName($database['name']);
+            $exists = match ($type) {
+                'mysql' => $this->mysqlDatabaseExists($name),
+                'postgresql' => $this->postgresDatabaseExists($name),
+                default => throw new RuntimeException("Unsupported cPanel database type: {$type}"),
+            };
+            $previousState = $this->recordedDatabaseOwnershipState($manifest, $type, $name);
+            $state = $this->resolveDatabaseOwnershipState($database, $type, $name, $exists, $manifest);
+            $action = ! $exists ? 'create' : match ($previousState) {
+                'created' => 'created',
+                'adopted' => 'adopted',
+                default => 'adopt',
+            };
+            $dispositions[] = ['type' => $type, 'name' => $name, 'action' => $action, 'ownership_state' => $state];
+        }
+        return $dispositions;
+    }
+
+    /** @param array<string, mixed>|null $manifest */
+    private function resolveDatabaseOwnershipState(array $database, string $type, string $name, bool $exists, ?array $manifest): ?string
+    {
+        if (! $exists) return 'created';
+        $recorded = $this->recordedDatabaseOwnershipState($manifest, $type, $name);
+        if ($recorded !== null) return $recorded;
+        if ($database['adopt_existing'] === true) return 'adopted';
+        throw new RuntimeException("Existing cPanel database {$name} requires adopt_existing: true for this project and profile.");
+    }
+
+    /** @param array<string, mixed>|null $manifest */
+    private function recordedDatabaseOwnershipState(?array $manifest, string $type, string $name): ?string
+    {
+        $databases = $manifest['databases'] ?? null;
+        if (! is_array($databases)) return null;
+        foreach ($databases as $database) {
+            if (! is_array($database) || ($database['type'] ?? null) !== $type || ($database['name'] ?? null) !== $name) continue;
+            $state = $database['database_ownership_state'] ?? null;
+            if ($state === 'created' || $state === 'adopted') return $state;
+            if (($database['database_created'] ?? null) === true) return 'created';
+        }
+        return null;
     }
 
     /**
@@ -3334,6 +3567,20 @@ final class CpanelProvider implements
         $options = $this->profileValue($profile, 'cpanel', []);
 
         return \is_array($options) ? $options : [];
+    }
+
+    private function adoptionConsent(object $profile): mixed
+    {
+        return $this->cpanelOptions($profile)['adopt_existing'] ?? $this->config['adopt_existing'] ?? null;
+    }
+
+    private function adoptionConsentMatches(mixed $consent, object $project, object $profile): bool
+    {
+        return \is_array($consent)
+            && \count($consent) === 3
+            && ($consent['project'] ?? null) === $this->projectName($project)
+            && ($consent['profile'] ?? null) === $this->profileName($profile)
+            && ($consent['domain'] ?? null) === $this->domain($profile);
     }
 
     private function stringCpanelOption(object $profile, string $key, string $default = ''): string

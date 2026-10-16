@@ -56,6 +56,7 @@ function cpanelProviderWithExistingDomain(
         'host' => 'cpanel.example.com',
         'username' => 'shipper',
         'password' => 'secret',
+        'adopt_existing' => ['project' => 'sample', 'profile' => 'production', 'domain' => strtolower($domain)],
         ...$config,
     ], $client);
 }
@@ -144,6 +145,19 @@ test('validation rejects missing database password', function (): void {
     expect($errors)->toContain('Database password is required for cPanel database user: app');
 });
 
+test('database password option validation returns one stable error', function (): void {
+    $provider = cpanelProviderWithExistingDomain(new FakeCpanelApiClient, ['deployment_method' => 'fileman']);
+    $errors = $provider->validate(new CpanelTestProject('.'), new CpanelTestProfile([
+        'domain' => 'app.example.com', 'deploy_path' => '/app',
+        'databases' => ['main' => [
+            'name' => 'app', 'user' => 'app', 'type' => 'mysql', 'password' => 'secret',
+            'update_password' => 'false',
+        ]],
+    ]));
+
+    expect($errors)->toContain('Database update_password must be a boolean');
+});
+
 test('fileman apply creates directories and uploads mapped files', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [
@@ -170,6 +184,7 @@ test('fileman can extract one archive through a monitored cpanel task', function
     ]);
     $client->responses['api2:Cron:add_line'] = $client->success([['linekey' => '83']]);
     $client->responses['uapi:Fileman:get_file_content'] = $client->success(['content' => "0\n"]);
+    $client->responseQueues['uapi:Fileman:get_file_content'] = [['success' => false, 'message' => 'No such file or directory', 'data' => null, 'raw' => []]];
 
     expect($provider->apply(
         new CpanelTestProject(cpanelProviderFixture()),
@@ -198,6 +213,7 @@ test('public web directory archives keep the application and publish its web roo
     ]);
     $client->responses['api2:Cron:add_line'] = $client->success([['linekey' => '84']]);
     $client->responses['uapi:Fileman:get_file_content'] = $client->success(['content' => "0\n"]);
+    $client->responseQueues['uapi:Fileman:get_file_content'] = [['success' => false, 'message' => 'No such file or directory', 'data' => null, 'raw' => []]];
     $project = new CpanelTestProject(
         cpanelProviderFixture([
             'composer.json' => '{}',
@@ -300,6 +316,75 @@ test('php mysql cron redirect ssl and alias lifecycle is applied through cpanel 
             'DB_CONNECTION="mysql"',
             'DB_DATABASE="shipper_app"',
         );
+});
+
+test('database planning blocks unconsented reuse and discloses exact adoption', function (): void {
+    foreach ([false, true] as $adopt) {
+        $client = new FakeCpanelApiClient;
+        $client->responses['uapi:Fileman:get_file_content'] = $client->success(['content' => json_encode([
+            'project' => 'sample', 'profile' => 'production', 'domain' => ['domain' => 'app.example.com', 'created' => true],
+        ], JSON_THROW_ON_ERROR)]);
+        $client->responses['uapi:Mysql:list_databases'] = $client->success([['database' => 'shipper_app']]);
+        $provider = new CpanelProvider(['host' => 'cpanel.example.com', 'username' => 'shipper', 'password' => 'secret'], $client);
+        $project = new CpanelTestProject('.');
+        $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'databases' => [
+            'main' => ['type' => 'mysql', 'name' => 'app', 'user' => 'app', 'password' => 'synthetic', 'adopt_existing' => $adopt],
+        ]]);
+        $plan = $provider->plan($project, $profile);
+        expect($plan['blocked'])->toBe(! $adopt);
+        if ($adopt) expect($plan['actions'])->toContain('Adopt existing mysql database: shipper_app');
+        else expect($plan['actions'][0])->toStartWith('BLOCKED:')->toContain('adopt_existing: true');
+        expect($client->uploadedFiles)->toBe([])
+            ->and(array_column($client->calls, 'function'))->not->toContain('create_database');
+    }
+});
+
+test('database adoption state persists across re-apply and destroy preserves adopted databases', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:Mysql:list_databases'] = $client->success([['database' => 'shipper_app']]);
+    $client->responses['uapi:Mysql:list_users'] = $client->success([['user' => 'shipper_app']]);
+    $provider = new CpanelProvider(['host' => 'cpanel.example.com', 'username' => 'shipper', 'password' => 'secret'], $client);
+    $project = new CpanelTestProject('.');
+    $consent = new CpanelTestProfile(['databases' => ['main' => [
+        'type' => 'mysql', 'name' => 'app', 'user' => 'app', 'password' => 'synthetic', 'adopt_existing' => true,
+    ]]]);
+    $state = (new ReflectionMethod($provider, 'ensureDatabases'))->invoke($provider, $project, $consent);
+    expect($state['resources'][0]['database_ownership_state'])->toBe('adopted')
+        ->and($state['resources'][0]['database_created'])->toBeFalse();
+
+    $manifest = ['databases' => $state['resources']];
+    $withoutConsent = new CpanelTestProfile(['databases' => ['main' => [
+        'type' => 'mysql', 'name' => 'app', 'user' => 'app', 'password' => 'synthetic',
+    ]]]);
+    $client->responses['uapi:Mysql:list_databases'] = $client->success([['database' => 'shipper_app']]);
+    $client->responses['uapi:Mysql:list_users'] = $client->success([['user' => 'shipper_app']]);
+    $reapplied = (new ReflectionMethod($provider, 'ensureDatabases'))->invoke($provider, $project, $withoutConsent, $manifest);
+    expect($reapplied['resources'][0]['database_ownership_state'])->toBe('adopted');
+
+    (new ReflectionMethod($provider, 'destroyDatabases'))->invoke($provider, $manifest);
+    expect(cpanelProviderCalls($client, 'uapi', 'Mysql', 'delete_database'))->toBeEmpty()
+        ->and(cpanelProviderCalls($client, 'uapi', 'Mysql', 'delete_user'))->toBeEmpty();
+});
+
+test('apply blocks existing database adoption before hooks or resource mutations', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:Fileman:get_file_content'] = $client->success(['content' => json_encode([
+        'project' => 'sample', 'profile' => 'production', 'domain' => ['domain' => 'app.example.com', 'created' => true],
+    ], JSON_THROW_ON_ERROR)]);
+    $client->responses['uapi:Mysql:list_databases'] = $client->success([['database' => 'shipper_app']]);
+    $provider = new CpanelProvider(['host' => 'cpanel.example.com', 'username' => 'shipper', 'password' => 'secret'], $client);
+    $profile = new CpanelTestProfile([
+        'domain' => 'app.example.com', 'deploy_path' => '/app',
+        'databases' => ['main' => ['type' => 'mysql', 'name' => 'app', 'user' => 'app', 'password' => 'synthetic']],
+        'cpanel' => ['operations' => ['before_apply' => [[
+            'api' => 'uapi', 'module' => 'Variables', 'function' => 'get_user_information',
+        ]]]],
+    ]);
+    expect($provider->apply(new CpanelTestProject('.'), $profile))->toBeFalse()
+        ->and($provider->getLastError())->toContain('adopt_existing: true')
+        ->and(array_map(static fn (array $call): string => $call['module'].':'.$call['function'], $client->calls))
+        ->toBe(['Variables:get_user_information', 'Fileman:get_file_content', 'Mysql:list_databases'])
+        ->and($client->uploadedFiles)->toBe([]);
 });
 
 test('dns email and ftp resources are reconciled without leaking credentials and safely destroyed', function (): void {
@@ -508,7 +593,7 @@ test('git deployment reports a redacted cpanel clone failure', function (): void
         ],
     ]);
     $client->responseQueues['uapi:Fileman:get_file_content'] = [
-        $client->success(),
+        ['success' => false, 'message' => 'No such file or directory', 'data' => null, 'raw' => []],
         $client->success([
             'content' => "Cloning...\nfatal: unable to access 'https://token@github.com/shippercli/sample.git': Could not resolve host: github.com\n",
         ]),
@@ -872,7 +957,7 @@ test('destroy protects the account web root', function (): void {
         'content' => \json_encode([
             'project' => 'sample',
             'profile' => 'production',
-            'domain' => ['created' => false],
+            'domain' => ['domain' => 'example.com', 'created' => false],
             'deploy_path' => '/public_html',
         ], JSON_THROW_ON_ERROR),
     ]);
@@ -930,6 +1015,8 @@ test('repeated apply preserves ownership needed for safe destroy', function (): 
     ];
     $client->responseQueues['uapi:Mysql:list_databases'] = [
         $client->success([]),
+        $client->success([]),
+        $client->success([['database' => 'shipper_app']]),
         $client->success([['database' => 'shipper_app']]),
     ];
     $client->responseQueues['uapi:Mysql:list_users'] = [
@@ -999,6 +1086,7 @@ test('repeated apply preserves ownership needed for safe destroy', function (): 
     expect($secondManifest['domain']['created'])->toBeTrue()
         ->and($secondManifest['aliases'][0]['created'])->toBeTrue()
         ->and($secondManifest['databases'][0]['database_created'])->toBeTrue()
+        ->and($secondManifest['databases'][0]['database_ownership_state'])->toBe('created')
         ->and($secondManifest['databases'][0]['user_created'])->toBeTrue()
         ->and($secondManifest['passenger']['created'])->toBeTrue()
         ->and($secondManifest['deployment']['repository_created'])->toBeTrue();
@@ -1022,6 +1110,7 @@ test('apply refuses to overwrite another deployment manifest', function (): void
         'content' => \json_encode([
             'project' => 'another-project',
             'profile' => 'production',
+            'domain' => ['domain' => 'app.example.com'],
             'deploy_path' => '/app',
         ], JSON_THROW_ON_ERROR),
     ]);
@@ -1047,6 +1136,7 @@ test('apply archives the previous managed release before deployment', function (
     $manifest = [
         'project' => 'sample',
         'profile' => 'production',
+        'domain' => ['domain' => 'app.example.com'],
         'deploy_path' => '/app',
     ];
     $client->responseQueues['uapi:Fileman:get_file_content'] = [
@@ -1084,6 +1174,7 @@ test('rollback restores a selected managed release archive', function (): void {
     $manifest = [
         'project' => 'sample',
         'profile' => 'production',
+        'domain' => ['domain' => 'app.example.com'],
         'deploy_path' => '/app',
     ];
     $release = '20260727010101-deadbeef.tar.gz';
@@ -1118,6 +1209,7 @@ test('status reports manifest deployment resource usage and releases', function 
         'content' => \json_encode([
             'project' => 'sample',
             'profile' => 'production',
+            'domain' => ['domain' => 'app.example.com'],
             'deploy_path' => '/app',
             'applied_at' => '2026-07-27T01:02:03+00:00',
             'runtime' => ['type' => 'php'],
@@ -1273,3 +1365,107 @@ test('explicit git deployment reports unavailable account features precisely', f
         ->and($provider->getLastError())
         ->toBe('List cPanel Git repositories failed: Git Version Control is not enabled for this account');
 });
+
+test('a copied manifest cannot authorize a different target domain', function (string $operation): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:Fileman:get_file_content'] = $client->success([
+        'content' => json_encode([
+            'project' => 'sample',
+            'profile' => 'production',
+            'domain' => ['domain' => 'other.example.com', 'created' => true],
+        ], JSON_THROW_ON_ERROR),
+    ]);
+    $provider = cpanelProviderWithExistingDomain($client);
+    $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app']);
+
+    expect($provider->{$operation}(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+        ->and($provider->getLastError())->toContain('belongs to another deployment')
+        ->and(array_map(static fn (array $call): string => $call['module'].':'.$call['function'], $client->calls))
+        ->toBe(['Variables:get_user_information', 'Fileman:get_file_content'])
+        ->and($client->uploadedFiles)->toBe([]);
+})->with(['apply', 'destroy']);
+
+test('existing domains require exact adoption consent before mutation', function (mixed $adopt): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, ['adopt_existing' => $adopt]);
+    $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app']);
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+        ->and($provider->getLastError())->toMatch('/adopt/i')
+        ->and(array_map(static fn (array $call): string => $call['module'].':'.$call['function'], $client->calls))
+        ->toBe($adopt === null || $adopt === false
+            ? ['Variables:get_user_information', 'Fileman:get_file_content', 'DomainInfo:domains_data']
+            : [])
+        ->and($client->uploadedFiles)->toBe([]);
+})->with([null, false, true, 'true', 1, [['project' => 'sample', 'profile' => 'production', 'domain' => 'other.example.com']]]);
+
+test('profile scoped explicit adoption allows deploying to an existing domain', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, ['adopt_existing' => false, 'deployment_method' => 'fileman']);
+    $profile = new CpanelTestProfile([
+        'domain' => 'app.example.com',
+        'deploy_path' => '/app',
+        'cpanel' => ['adopt_existing' => ['project' => 'sample', 'profile' => 'production', 'domain' => 'app.example.com']],
+    ]);
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeTrue()
+        ->and($client->uploadedFiles)->toHaveKey('.shipper-manifest.json');
+    $manifest = json_decode($client->uploadedFiles['.shipper-manifest.json'], true);
+    expect($manifest['domain']['created'])->toBeFalse()
+        ->and($manifest['domain']['ownership_state'])->toBe('adopted');
+});
+
+test('adoption plan names the exact existing domain and scope', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, [], 'app.example.com');
+    $project = new CpanelTestProject('.');
+    $profile = new CpanelTestProfile([
+        'domain' => 'app.example.com',
+        'deploy_path' => '/app',
+        'cpanel' => ['adopt_existing' => ['project' => 'sample', 'profile' => 'production', 'domain' => 'app.example.com']],
+    ]);
+    $plan = $provider->plan($project, $profile);
+
+    expect($plan['blocked'])->toBeFalse()
+        ->and($plan['actions'])->toContain('Adopt existing cPanel domain: app.example.com')
+        ->and($plan['actions'])->not->toContain('Create or find domain: app.example.com');
+});
+
+test('manifest read and parse failures block mutations even with adoption enabled', function (string $operation): void {
+    $responses = [
+        ['success' => false, 'message' => 'Permission denied', 'data' => null, 'raw' => []],
+        ['success' => true, 'message' => 'OK', 'data' => null, 'raw' => []],
+        ['success' => true, 'message' => 'OK', 'data' => ['content' => ''], 'raw' => []],
+        ['success' => true, 'message' => 'OK', 'data' => ['content' => '{broken-secret-content'], 'raw' => []],
+        ['success' => true, 'message' => 'OK', 'data' => ['content' => '{}'], 'raw' => []],
+    ];
+    foreach ($responses as $response) {
+        $client = new FakeCpanelApiClient;
+        $client->responses['uapi:Fileman:get_file_content'] = $response;
+        $provider = cpanelProviderWithExistingDomain($client, ['adopt_existing' => ['project' => 'sample', 'profile' => 'production', 'domain' => 'app.example.com']]);
+        $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app']);
+        expect($provider->{$operation}(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+            ->and($provider->getLastError())->toContain('manifest')->not->toContain('broken-secret-content')
+            ->and(array_map(static fn (array $call): string => $call['module'].':'.$call['function'], $client->calls))
+            ->toBe(['Variables:get_user_information', 'Fileman:get_file_content'])
+            ->and($client->uploadedFiles)->toBe([]);
+    }
+})->with(['apply', 'destroy']);
+
+
+test('shared database users are created only once even when inventory reads lag within apply', function (string $type, string $module): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses["uapi:{$module}:list_databases"] = $client->success([]);
+    $client->responses["uapi:{$module}:list_users"] = $client->success([]);
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $project = new CpanelTestProject(cpanelProviderFixture());
+    $profile = new CpanelTestProfile([
+        'domain' => 'app.example.com', 'deploy_path' => '/app',
+        'databases' => [
+            'first' => ['type' => $type, 'name' => 'first', 'user' => 'shared', 'password' => 'shared-secret'],
+            'second' => ['type' => $type, 'name' => 'second', 'user' => 'shared', 'password' => 'shared-secret'],
+        ],
+    ]);
+
+    expect($provider->apply($project, $profile))->toBeTrue()
+        ->and(cpanelProviderCalls($client, 'uapi', $module, 'create_database'))->toHaveCount(2)
+        ->and(cpanelProviderCalls($client, 'uapi', $module, 'create_user'))->toHaveCount(1);
+})->with([['mysql', 'Mysql'], ['postgresql', 'Postgresql']]);
