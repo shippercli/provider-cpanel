@@ -50,3 +50,20 @@ to remain within its intended directory. A complete solution also needs tests
 for legitimate in-tree links, absolute and relative escaping links, hardlinks,
 duplicate/overlapping entries, and changes between inspection and extraction.
 Do not describe the current readability check as safe archive validation.
+
+## Validator implementation in progress
+
+`resources/validate-release.py` provides a standalone Python 3 archive inspection
+step. Run its offline tests with `python3 tests/archive/test_validate_release.py`.
+It reads gzip data through the trailer, reads regular-file payloads, rejects
+unsupported member types and special permission bits, and checks canonical
+member identities, parent types, symlinks and hardlinks. Symlink destinations
+are resolved component by component, including intervening links; hardlinks must
+refer to an archived regular file. Internal dangling symlinks are accepted.
+
+This helper is not yet called by rollback. Its tests do not fix the confirmed
+restoration gap. Integration must establish the remote Python runtime, capture
+a private immutable archive copy, validate and extract that copy into an empty
+private staging directory, and restore the verified tree without following
+existing deployment links. Failures before staging is complete must preserve
+the active deployment. The current tar readability command remains unchanged.

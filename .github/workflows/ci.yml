@@ -37,6 +37,9 @@ jobs:
       - name: Validate optimized autoloading
         run: composer dump-autoload --optimize --strict-psr
 
+      - name: Validate release archive inspection
+        run: python3 tests/archive/test_validate_release.py
+
       - name: Run tests
         run: composer test
 
