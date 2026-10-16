@@ -805,6 +805,7 @@ final class CpanelProvider implements
         ]), "Schedule {$label}");
         $linekey = $this->findValueAtKey($cron, 'linekey');
         if (! \is_scalar($linekey) || (string) $linekey === '') {
+            $this->cancelUntrackedOneTimeCommand($statusFile, $label);
             throw new RuntimeException("cPanel did not return a line key for {$label}");
         }
 
@@ -903,6 +904,49 @@ final class CpanelProvider implements
     private function markOneTimeCommandCancelled(string $statusFile): void
     {
         $this->uploadContent(\dirname($statusFile), \basename($statusFile), "125\n", 'Mark incomplete cPanel task as cancelled');
+    }
+
+    private function cancelUntrackedOneTimeCommand(string $statusFile, string $label): void
+    {
+        $errors = [];
+        try {
+            $this->markOneTimeCommandCancelled($statusFile);
+        } catch (Throwable $error) {
+            $errors[] = $error;
+        }
+
+        try {
+            $existing = $this->required($this->api()->api2('Cron', 'listcron'), "Inspect cPanel task schedule for {$label}");
+            $records = $this->recordsContaining($existing, 'command', $statusFile);
+            if ($records === []) {
+                $errors[] = new RuntimeException("No matching cPanel task schedule was found for {$label}");
+            }
+            $linekeys = [];
+            foreach ($records as $record) {
+                $key = $record['linekey'] ?? null;
+                if (! \is_scalar($key) || (string) $key === '') {
+                    throw new RuntimeException("A matching cPanel task schedule for {$label} has no line key");
+                }
+                $linekeys[(string) $key] = true;
+            }
+            foreach (\array_keys($linekeys) as $key) {
+                $this->required(
+                    $this->api()->api2('Cron', 'remove_line', ['linekey' => $key]),
+                    "Remove untracked cPanel task schedule for {$label}",
+                );
+            }
+        } catch (Throwable $error) {
+            $errors[] = $error;
+        }
+
+        if ($errors !== []) {
+            $messages = \array_map(static fn (Throwable $error): string => $error->getMessage(), $errors);
+            throw new RuntimeException(
+                "cPanel did not return a line key for {$label}; cleanup is unconfirmed: ".\implode('; ', $messages),
+                0,
+                $errors[0],
+            );
+        }
     }
 
     /**

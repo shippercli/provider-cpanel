@@ -126,3 +126,48 @@ test('a cancellation marker prevents a delayed cron task from starting', functio
         rmdir($home);
     }
 });
+
+test('a missing add-line key writes a cancellation marker and reconciles the scheduled task', function (): void {
+    $home = sys_get_temp_dir().'/shipper-task-untracked-'.bin2hex(random_bytes(6));
+    mkdir($home, 0700);
+    $statusFile = $home.'/.shipper-task-random.status';
+
+    try {
+        [$client, $provider] = rollbackTaskFixture(['home_directory' => $home]);
+        $client->responses['api2:Cron:listcron'] = $client->success([[
+            'command' => '/bin/sh -c test -f '.escapeshellarg($statusFile),
+            'linekey' => 113,
+        ]]);
+        $cancel = new ReflectionMethod($provider, 'cancelUntrackedOneTimeCommand');
+        $cancel->invoke($provider, $statusFile, 'fixture command');
+
+        expect($client->uploadedFiles[basename($statusFile)] ?? null)->toBe("125\n")
+            ->and(cpanelProviderCalls($client, 'api2', 'Cron', 'remove_line'))->toHaveCount(1)
+            ->and(cpanelProviderCalls($client, 'api2', 'Cron', 'remove_line')[0]['parameters']['linekey'])->toBe(113);
+    } finally {
+        foreach (array_merge(glob($home.'/*'), glob($home.'/.*')) as $file) {
+            if (is_file($file)) unlink($file);
+        }
+        rmdir($home);
+    }
+});
+
+test('a missing add-line key stops polling and leaves a cancellation marker', function (): void {
+    $home = sys_get_temp_dir().'/shipper-task-no-key-'.bin2hex(random_bytes(6));
+    mkdir($home, 0700);
+
+    try {
+        [$client, $provider, , $profile] = rollbackTaskFixture(['home_directory' => $home]);
+        $client->responses['api2:Cron:add_line'] = $client->success([]);
+        $run = new ReflectionMethod($provider, 'runOneTimeCommand');
+        expect(fn () => $run->invoke($provider, 'fixture command', 'true', $profile))
+            ->toThrow(RuntimeException::class, 'did not return a line key');
+        expect(cpanelProviderCalls($client, 'api2', 'Cron', 'listcron'))->toHaveCount(1)
+            ->and(array_values($client->uploadedFiles))->toContain("125\n");
+    } finally {
+        foreach (array_merge(glob($home.'/*'), glob($home.'/.*')) as $file) {
+            if (is_file($file)) unlink($file);
+        }
+        rmdir($home);
+    }
+});

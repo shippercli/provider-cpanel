@@ -16,6 +16,12 @@ sees that marker and skips starting the command. This cannot stop a command that
 was already running when the timeout occurred. If cancellation-marker upload or
 cron removal fails, inspect the task and deployment state before retrying.
 
+If cPanel acknowledges task creation without returning its line key, Shipper
+writes the cancellation marker and searches the cron inventory for the unique
+task path before attempting removal. If the matching task cannot be identified
+and removed, the operation fails with cleanup unconfirmed; inspect the account
+cron list before retrying.
+
 A cleanup failure does not mean the command was undone: it may already have
 changed application files. Inspect the task and account before retrying. Remove
 only the exact failed task, verify that it is no longer scheduled, then remove
