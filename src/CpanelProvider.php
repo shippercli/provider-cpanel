@@ -102,6 +102,11 @@ final class CpanelProvider implements
             $errors[] = 'Project path is required';
         }
 
+        $booleanError = $this->deploymentBooleanError($project, $profile);
+        if ($booleanError !== null) {
+            return [$booleanError];
+        }
+
         if ($this->domain($profile) === '') {
             $errors[] = 'Domain is required for profile';
         }
@@ -167,6 +172,10 @@ final class CpanelProvider implements
     {
         $domain = $this->domain($profile);
         $method = $this->deploymentMethod($project, $profile);
+        $booleanError = $this->deploymentBooleanError($project, $profile);
+        if ($booleanError !== null) {
+            throw new RuntimeException($booleanError);
+        }
         $runtime = $this->runtimeConfig($project, $profile);
         $accountResources = $this->accountResourceConfigs($project, $profile);
         $actions = [
@@ -262,6 +271,12 @@ final class CpanelProvider implements
     public function apply(object $project, object $profile): bool
     {
         $this->lastError = '';
+        $booleanError = $this->deploymentBooleanError($project, $profile);
+        if ($booleanError !== null) {
+            $this->lastError = $booleanError;
+
+            return false;
+        }
 
         try {
             $context = $this->context($project, $profile);
@@ -494,6 +509,12 @@ final class CpanelProvider implements
         ?string $release = null,
     ): bool {
         $this->lastError = '';
+        $booleanError = $this->deploymentBooleanError($project, $profile);
+        if ($booleanError !== null) {
+            $this->lastError = $booleanError;
+
+            return false;
+        }
 
         try {
             $manifest = $this->matchingManifest($project, $profile, 'rollback');
@@ -2502,7 +2523,7 @@ final class CpanelProvider implements
             'version' => $version,
             'application_root' => $this->arrayString($raw, 'application_root'),
             'base_uri' => $this->arrayString($raw, 'base_uri', '/'),
-            'install_dependencies' => ! isset($raw['install_dependencies']) || (bool) $raw['install_dependencies'],
+            'install_dependencies' => $this->booleanValue($raw, 'install_dependencies', true, 'runtime.install_dependencies'),
             'php_ini' => $directives,
         ];
     }
@@ -2702,7 +2723,7 @@ final class CpanelProvider implements
                 $result[$name] = [
                     'command' => $this->arrayString($cron, 'command'),
                     'frequency' => $this->arrayString($cron, 'frequency', 'daily'),
-                    'enabled' => ! isset($cron['enabled']) || (bool) $cron['enabled'],
+                    'enabled' => $this->booleanValue($cron, 'enabled', true, 'cron.enabled'),
                 ];
             }
 
@@ -2747,7 +2768,7 @@ final class CpanelProvider implements
                     'type' => \is_int($redirect['type'] ?? null) || \is_string($redirect['type'] ?? null)
                         ? $redirect['type']
                         : 301,
-                    'enabled' => ! isset($redirect['enabled']) || (bool) $redirect['enabled'],
+                    'enabled' => $this->booleanValue($redirect, 'enabled', true, 'redirects.enabled'),
                 ];
             }
 
@@ -2783,9 +2804,9 @@ final class CpanelProvider implements
         $raw = $this->profileValue($profile, 'ssl');
         if (\is_array($raw)) {
             return [
-                'enabled' => (bool) ($raw['enabled'] ?? false),
+                'enabled' => $this->booleanValue($raw, 'enabled', false, 'ssl.enabled'),
                 'type' => \strtolower($this->arrayString($raw, 'type', 'autossl')),
-                'force_https' => (bool) ($raw['force_https'] ?? false),
+                'force_https' => $this->booleanValue($raw, 'force_https', false, 'ssl.force_https'),
                 'certificate' => $this->arrayString($raw, 'certificate'),
                 'private_key' => $this->arrayString($raw, 'private_key'),
                 'ca_bundle' => $this->arrayString($raw, 'ca_bundle'),
@@ -3341,11 +3362,49 @@ final class CpanelProvider implements
         return $this->arrayString($this->cpanelOptions($profile), $key, $default);
     }
 
+    private function deploymentBooleanError(object $project, object $profile): ?string
+    {
+        $options = $this->cpanelOptions($profile);
+        foreach (['clean', 'backup_before_deploy', 'backup_before_rollback', 'environment_file'] as $key) {
+            if (\array_key_exists($key, $options) && ! \is_bool($options[$key])) {
+                return "cPanel {$key} must be a boolean";
+            }
+        }
+
+        try {
+            $this->runtimeConfig($project, $profile);
+            $this->cronConfigs($project, $profile);
+            $this->redirectConfigs($project, $profile);
+            $this->sslConfig($project, $profile);
+        } catch (RuntimeException $exception) {
+            return $exception->getMessage();
+        }
+
+        return null;
+    }
+
+    /** @param array<string, mixed> $values */
+    private function booleanValue(array $values, string $key, bool $default, string $label): bool
+    {
+        if (! \array_key_exists($key, $values)) {
+            return $default;
+        }
+        if (! \is_bool($values[$key])) {
+            throw new RuntimeException("{$label} must be a boolean");
+        }
+
+        return $values[$key];
+    }
+
     private function boolCpanelOption(object $profile, string $key, bool $default): bool
     {
         $options = $this->cpanelOptions($profile);
 
-        return isset($options[$key]) ? (bool) $options[$key] : $default;
+        if (\array_key_exists($key, $options) && ! \is_bool($options[$key])) {
+            throw new RuntimeException("cPanel {$key} must be a boolean");
+        }
+
+        return $options[$key] ?? $default;
     }
 
     private function intCpanelOption(object $profile, string $key, int $default): int
@@ -3467,7 +3526,12 @@ final class CpanelProvider implements
             return $default;
         }
 
-        return (bool) $object->{$method}();
+        $value = $object->{$method}();
+        if (! \is_bool($value)) {
+            throw new RuntimeException("cPanel {$method}() must return a boolean");
+        }
+
+        return $value;
     }
 
     private function projectMethodValue(object $object, string $method, mixed $default = null): mixed
