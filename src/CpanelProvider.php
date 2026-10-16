@@ -85,6 +85,10 @@ final class CpanelProvider implements
     public function validate(object $project, object $profile): array
     {
         $errors = [];
+        $adopt = $this->cpanelOptions($profile)['adopt_existing'] ?? $this->config['adopt_existing'] ?? false;
+        if (! \is_bool($adopt)) {
+            $errors[] = 'cPanel adopt_existing must be a boolean.';
+        }
 
         if ($this->stringConfig('host') === '') {
             $errors[] = 'cPanel host is required';
@@ -272,9 +276,18 @@ final class CpanelProvider implements
                 );
             }
 
+            $domainInventory = null;
+            if ($previousManifest === null) {
+                $domainInventory = $this->required($this->api()->uapi('DomainInfo', 'domains_data', ['format' => 'hash']), 'Inspect cPanel domain ownership');
+                $adopt = $this->cpanelOptions($profile)['adopt_existing'] ?? $this->config['adopt_existing'] ?? false;
+                if ($this->classifyDomain($domainInventory, $this->domain($profile)) !== null && $adopt !== true) {
+                    throw new RuntimeException('Refusing cPanel apply to an existing domain without a matching Shipper manifest; explicitly set adopt_existing: true after reviewing the target.');
+                }
+            }
+
             $this->runCustomOperations($profile, 'before_apply', $context);
             $features = $this->required($this->api()->uapi('Features', 'list_features'), 'Discover cPanel features');
-            $domainState = $this->ensureDomain($profile);
+            $domainState = $this->ensureDomain($profile, $domainInventory);
             $domainState = $this->preserveOwnership(
                 $domainState,
                 $previousManifest['domain'] ?? null,
@@ -527,10 +540,10 @@ final class CpanelProvider implements
     /**
      * @return array{domain: string, type: string, created: bool, primary_domain: string}
      */
-    private function ensureDomain(object $profile): array
+    private function ensureDomain(object $profile, mixed $domains = null): array
     {
         $domain = $this->domain($profile);
-        $domains = $this->required(
+        $domains ??= $this->required(
             $this->api()->uapi('DomainInfo', 'domains_data', ['format' => 'hash']),
             'List cPanel domains',
         );

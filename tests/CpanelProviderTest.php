@@ -56,6 +56,7 @@ function cpanelProviderWithExistingDomain(
         'host' => 'cpanel.example.com',
         'username' => 'shipper',
         'password' => 'secret',
+        'adopt_existing' => true,
         ...$config,
     ], $client);
 }
@@ -1292,3 +1293,28 @@ test('a copied manifest cannot authorize a different target domain', function (s
         ->toBe(['Variables:get_user_information', 'Fileman:get_file_content'])
         ->and($client->uploadedFiles)->toBe([]);
 })->with(['apply', 'destroy']);
+
+test('existing domains require explicit adoption before any mutation', function (mixed $adopt): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, ['adopt_existing' => $adopt]);
+    $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app']);
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+        ->and($provider->getLastError())->toContain('explicitly set adopt_existing: true')
+        ->and(array_map(static fn (array $call): string => $call['module'].':'.$call['function'], $client->calls))
+        ->toBe(['Variables:get_user_information', 'Fileman:get_file_content', 'DomainInfo:domains_data'])
+        ->and($client->uploadedFiles)->toBe([]);
+})->with([null, false, 'true', 1]);
+
+test('profile scoped explicit adoption allows deploying to an existing domain', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, ['adopt_existing' => false, 'deployment_method' => 'fileman']);
+    $profile = new CpanelTestProfile([
+        'domain' => 'app.example.com',
+        'deploy_path' => '/app',
+        'cpanel' => ['adopt_existing' => true],
+    ]);
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeTrue()
+        ->and($client->uploadedFiles)->toHaveKey('.shipper-manifest.json');
+    $manifest = json_decode($client->uploadedFiles['.shipper-manifest.json'], true);
+    expect($manifest['domain']['created'])->toBeFalse();
+});

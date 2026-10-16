@@ -40,9 +40,23 @@ projects:
           install_dependencies: true
         cpanel:
           domain_type: existing
+          adopt_existing: true
           backup_before_deploy: true
           release_retention: 5
 ```
+
+`domain_type: existing` selects an existing domain but does not establish
+ownership. Without a matching deployment manifest, apply requires the explicit
+`cpanel.adopt_existing: true` option shown above. Review the domain, deployment
+path, existing files, and account resources before enabling it: adoption permits
+Shipper to overwrite application configuration and files. Prefer a profile-level
+option to constrain adoption to that target. Provider-level `adopt_existing` is
+also supported. Only a boolean `true` opts in; strings and numbers do not.
+
+The resulting manifest records that the existing domain was not created by
+Shipper, so cleanup does not claim ownership of the domain itself. Subsequent
+applies require matching project, profile, and recorded domain scope. A manifest
+belonging to another deployment is rejected even when adoption is enabled.
 
 See [configuration](docs/configuration.md) for runtime, database, cron, SSL,
 release, and account-specific options.
