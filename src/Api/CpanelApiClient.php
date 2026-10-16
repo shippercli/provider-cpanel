@@ -40,6 +40,7 @@ final class CpanelApiClient implements CpanelApiClientInterface
     /** @param array<string, mixed> $config */
     public function __construct(array $config, ?ClientInterface $httpClient = null)
     {
+        self::assertSecureTransport($config);
         [$this->hostname, $sourcePort, $secure] = $this->parseHost($config['host'] ?? '');
 
         $configuredPort = $this->integerValue($config['cpanel_port'] ?? $config['port'] ?? null);
@@ -56,7 +57,7 @@ final class CpanelApiClient implements CpanelApiClientInterface
             default => $this->cpanelPort === 2082 ? 2086 : 2087,
         };
 
-        $this->verifyTls = ! isset($config['verify_tls']) || (bool) $config['verify_tls'];
+        $this->verifyTls = true;
         $this->originIp = $this->nullableString($config['origin_ip'] ?? null);
         if ($this->originIp !== null && \filter_var($this->originIp, FILTER_VALIDATE_IP) === false) {
             throw new InvalidArgumentException('cPanel origin_ip must be a valid IPv4 or IPv6 address');
@@ -77,6 +78,25 @@ final class CpanelApiClient implements CpanelApiClientInterface
         $this->usesWhmApiToken = $whmApiToken !== null;
         $this->whmCredential = $whmApiToken ?? $whmPassword ?? $this->credential;
         $this->httpClient = $httpClient;
+    }
+
+    /** @param array<string, mixed> $config */
+    public static function assertSecureTransport(array $config): void
+    {
+        $host = $config['host'] ?? null;
+        if (! \is_string($host) || \trim($host) === '') {
+            throw new InvalidArgumentException('cPanel host is required');
+        }
+
+        $url = \str_contains($host, '://') ? \trim($host) : 'https://'.\trim($host);
+        $scheme = \parse_url($url, PHP_URL_SCHEME);
+        if (! \is_string($scheme) || \strtolower($scheme) !== 'https') {
+            throw new InvalidArgumentException('cPanel API credentials require HTTPS');
+        }
+
+        if (\array_key_exists('verify_tls', $config) && $config['verify_tls'] !== true) {
+            throw new InvalidArgumentException('cPanel TLS certificate verification must remain enabled');
+        }
     }
 
     public function uapi(string $module, string $function, array $parameters = [], string $method = 'GET'): array
@@ -266,16 +286,12 @@ final class CpanelApiClient implements CpanelApiClientInterface
 
     private function cpanelBaseUrl(): string
     {
-        $scheme = $this->cpanelPort === 2082 ? 'http' : 'https';
-
-        return "{$scheme}://{$this->hostname}:{$this->cpanelPort}";
+        return "https://{$this->hostname}:{$this->cpanelPort}";
     }
 
     private function whmBaseUrl(): string
     {
-        $scheme = $this->whmPort === 2086 ? 'http' : 'https';
-
-        return "{$scheme}://{$this->hostname}:{$this->whmPort}";
+        return "https://{$this->hostname}:{$this->whmPort}";
     }
 
     /**

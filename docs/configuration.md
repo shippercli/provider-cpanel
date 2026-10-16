@@ -4,15 +4,19 @@
 
 | Key | Required | Description |
 | --- | --- | --- |
-| `host` | Yes | cPanel hostname or URL |
-| `port` / `cpanel_port` | No | cPanel port; defaults to `2083` for HTTPS |
+| `host` | Yes | cPanel hostname or HTTPS URL; plaintext HTTP is rejected |
+| `port` / `cpanel_port` | No | HTTPS cPanel port; defaults to `2083` |
 | `username` | Yes | cPanel account username |
 | `api_token` | One credential | Preferred cPanel account API token |
 | `password` | One credential | cPanel account password |
 | `origin_ip` | No | Connect to a fixed origin IP while retaining the host for TLS |
-| `verify_tls` | No | Verify the cPanel TLS certificate; defaults to `true` |
+| `verify_tls` | No | Must remain `true`; disabling certificate verification is rejected |
 | `whm_username` | No | Reseller or root username for explicit WHM operations |
 | `whm_api_token` | No | Token for explicit WHM operations |
+
+cPanel and WHM credentials are sent only over HTTPS with certificate
+verification enabled. Custom ports must also provide HTTPS; the conventional
+plaintext ports are never used as HTTP fallbacks.
 
 ## Deployment
 

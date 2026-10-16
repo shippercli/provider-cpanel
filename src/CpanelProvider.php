@@ -88,6 +88,15 @@ final class CpanelProvider implements
 
         if ($this->stringConfig('host') === '') {
             $errors[] = 'cPanel host is required';
+        } else {
+            try {
+                CpanelApiClient::assertSecureTransport([
+                    'host' => $this->stringConfig('host'),
+                    'verify_tls' => $this->config['verify_tls'] ?? true,
+                ]);
+            } catch (\InvalidArgumentException $exception) {
+                $errors[] = $exception->getMessage();
+            }
         }
 
         if ($this->stringConfig('username') === '') {

@@ -144,6 +144,24 @@ test('validation rejects missing database password', function (): void {
     expect($errors)->toContain('Database password is required for cPanel database user: app');
 });
 
+test('validation rejects plaintext cPanel endpoints and disabled TLS verification', function (): void {
+    foreach ([
+        [['host' => 'http://cpanel.example.com'], 'cPanel API credentials require HTTPS'],
+        [['host' => 'cpanel.example.com', 'verify_tls' => false], 'cPanel TLS certificate verification must remain enabled'],
+    ] as [$config, $message]) {
+        $provider = new CpanelProvider([
+            ...$config,
+            'username' => 'shipper',
+            'api_token' => 'secret',
+        ], new FakeCpanelApiClient);
+        $errors = $provider->validate(new CpanelTestProject('.'), new CpanelTestProfile([
+            'domain' => 'app.example.com',
+        ]));
+
+        expect($errors)->toContain($message);
+    }
+});
+
 test('fileman apply creates directories and uploads mapped files', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [
