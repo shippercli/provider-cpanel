@@ -27,9 +27,20 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
     /** @var array<string, string> */
     public array $uploadedPaths = [];
 
+    public bool $readBackUploadedFiles = true;
+
     public function uapi(string $module, string $function, array $parameters = [], string $method = 'GET'): array
     {
         $this->calls[] = compact('module', 'function', 'parameters', 'method') + ['surface' => 'uapi'];
+
+        if ($module === 'Fileman' && $function === 'get_file_content' && $this->readBackUploadedFiles) {
+            $directory = \trim((string) ($parameters['dir'] ?? ''), '/');
+            $filename = (string) ($parameters['file'] ?? '');
+            $uploaded = $this->uploadedPaths[($directory === '' ? '' : $directory.'/').$filename] ?? null;
+            if (\is_string($uploaded)) {
+                return $this->success(['content' => $uploaded]);
+            }
+        }
 
         return $this->response("uapi:{$module}:{$function}");
     }
