@@ -14,6 +14,11 @@
 Optional cPanel modules are reported as unavailable instead of making the
 entire status command fail.
 
+## DNS inventories
+
+See [DNS inventory validation](dns-inventories.md) for response requirements and
+failure behavior during record creation, reconciliation and deletion.
+
 ## Logs
 
 `shipper logs` reads the selected domain's Apache error log through
