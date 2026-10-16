@@ -20,3 +20,18 @@ With `clean: false`, deployment can still replace uploaded application files and
 write managed metadata; it preserves extra directory contents instead of doing
 the initial cleanup. Existing genuine booleans and omitted defaults retain their
 behavior. Live hosting verification remains required.
+
+## Resource activation and dependency installation
+
+The same strict checks cover profile `cron.*.enabled`, `redirects.*.enabled`,
+`ssl.enabled`, `ssl.force_https`, and the effective runtime's
+`install_dependencies`. Cron and redirect `enabled` values default to true;
+SSL `enabled` and `force_https` default to false; dependency installation defaults
+to true. The cPanel runtime mapping overrides matching profile runtime fields
+before validation, preserving existing configuration precedence.
+
+Project-object `enabled()` and `forceHttps()` getters must return genuine
+booleans. Invalid profile flags or getter results stop validation, planning,
+apply and rollback before API calls. These checks do not establish whether the
+CLI's earlier configuration parsing correctly preserves every raw YAML type;
+that remains a separate integration requirement.
