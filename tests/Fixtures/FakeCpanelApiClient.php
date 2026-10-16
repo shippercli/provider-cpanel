@@ -31,6 +31,12 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
     {
         $this->calls[] = compact('module', 'function', 'parameters', 'method') + ['surface' => 'uapi'];
 
+        if ($module === 'Fileman' && $function === 'list_files'
+            && ! \array_key_exists('uapi:Fileman:list_files', $this->responses)
+            && ($this->responseQueues['uapi:Fileman:list_files'] ?? []) === []) {
+            return $this->success(['dirs' => [], 'files' => []]);
+        }
+
         return $this->response("uapi:{$module}:{$function}");
     }
 

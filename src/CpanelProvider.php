@@ -445,6 +445,14 @@ final class CpanelProvider implements
             }
         }
 
+        try {
+            $releases = $this->availableReleases($project, $profile);
+            $releaseInventory = ['available' => true];
+        } catch (RuntimeException $exception) {
+            $releases = [];
+            $releaseInventory = ['available' => false, 'error' => $exception->getMessage()];
+        }
+
         return [
             'provider' => $this->getName(),
             'project' => $this->projectName($project),
@@ -468,7 +476,8 @@ final class CpanelProvider implements
                 'email_forwarders' => $manifest['email_forwarders'] ?? [],
                 'ftp_accounts' => $manifest['ftp_accounts'] ?? [],
             ] : null,
-            'releases' => $this->availableReleases($project, $profile),
+            'releases' => $releases,
+            'release_inventory' => $releaseInventory,
         ];
     }
 
@@ -1857,15 +1866,35 @@ final class CpanelProvider implements
             'dir' => $this->relativeHomePath($directory),
             'show_hidden' => 1,
         ]);
-        if (! $result['success']) {
-            return [];
+        $data = $this->required($result, 'Read cPanel release inventory');
+        if (\is_array($data) && ! \array_is_list($data)) {
+            if (! \is_array($data['dirs'] ?? null) || ! \array_is_list($data['dirs'])
+                || ! \is_array($data['files'] ?? null) || ! \array_is_list($data['files'])) {
+                throw new RuntimeException('Unreadable cPanel release inventory');
+            }
+            $data = [...$data['dirs'], ...$data['files']];
+        }
+        if (! \is_array($data) || ! \array_is_list($data)) {
+            throw new RuntimeException('Unreadable cPanel release inventory');
         }
 
         $filenames = [];
-        foreach ($this->fileNames($result['data']) as $name) {
-            $filename = \basename($name);
-            if (\preg_match(self::RELEASE_FILENAME_PATTERN, $filename) === 1) {
-                $filenames[$filename] = true;
+        $seen = [];
+        foreach ($data as $row) {
+            $name = \is_array($row) ? ($row['file'] ?? null) : null;
+            $type = \is_array($row) ? ($row['type'] ?? null) : null;
+            if (! \is_string($name) || $name === '' || \basename($name) !== $name
+                || \str_contains($name, '\\') || \preg_match('/[\x00-\x1f\x7f]/', $name)
+                || ! \in_array($type, ['file', 'dir', 'char', 'block', 'fifo', 'link', 'socket'], true)
+                || isset($seen[$name])) {
+                throw new RuntimeException('Invalid or ambiguous cPanel release inventory');
+            }
+            $seen[$name] = true;
+            if (\preg_match(self::RELEASE_FILENAME_PATTERN, $name) === 1) {
+                if ($type !== 'file') {
+                    throw new RuntimeException('Unsafe archive entry in cPanel release inventory');
+                }
+                $filenames[$name] = true;
             }
         }
         $filenames = \array_keys($filenames);
