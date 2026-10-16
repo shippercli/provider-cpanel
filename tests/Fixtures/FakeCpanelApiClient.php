@@ -105,6 +105,6 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
             return \array_shift($this->responseQueues[$key]);
         }
 
-        return $this->responses[$key] ?? $this->success();
+        return $this->responses[$key] ?? $this->success($key === 'uapi:Variables:get_user_information' ? ['home' => '/home/shipper'] : null);
     }
 }
