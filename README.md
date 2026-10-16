@@ -63,3 +63,13 @@ The implementation targets cPanel account UAPI, the remaining operations that
 only exist in cPanel API 2, and optional privileged WHM API operations. See the
 [capability model](docs/capabilities.md) for availability rules and the
 [operations guide](docs/operations.md) for rollback and cleanup safety.
+
+### Git deployment status output
+
+`shipper status` exposes a summary of saved Git deployment tasks and retrieved
+Git deployment records: identifiers, method, repository root, state/status, and
+recognized lifecycle timestamps. Commands, logs, output, and unknown task fields
+are omitted. Unavailable or malformed Git status responses use fixed diagnostics.
+This changes the status JSON shape; consumers needing command output should use
+an explicit log or API operation. Other status sections retain their existing
+behavior. This does not establish live cPanel deployment verification.

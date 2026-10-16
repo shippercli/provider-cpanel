@@ -1127,6 +1127,7 @@ test('status reports manifest deployment resource usage and releases', function 
                 'task' => [
                     'task_id' => 'current-task',
                     'deploy_id' => 2,
+                    'command' => 'echo private-status-token',
                 ],
             ],
             'previous_release' => [
@@ -1140,7 +1141,7 @@ test('status reports manifest deployment resource usage and releases', function 
     ]);
     $client->responses['uapi:VersionControlDeployment:retrieve'] = $client->success([
         ['task_id' => 'old-task', 'deploy_id' => 1, 'state' => 'succeeded'],
-        ['task_id' => 'current-task', 'deploy_id' => 2, 'state' => 'succeeded'],
+        ['task_id' => 'current-task', 'deploy_id' => 2, 'state' => 'succeeded', 'output' => 'private-status-token'],
     ]);
     $client->responses['uapi:Fileman:list_files'] = $client->success([
         ['file' => '20260727010101-deadbeef.tar.gz'],
@@ -1153,6 +1154,8 @@ test('status reports manifest deployment resource usage and releases', function 
             'deploy_path' => '/app',
         ]),
     );
+
+    expect(json_encode($status, JSON_THROW_ON_ERROR))->not->toContain('private-status-token');
 
     expect($status['state'])->toBe('deployed')
         ->and($status['manifest_matches'])->toBeTrue()
@@ -1272,4 +1275,35 @@ test('explicit git deployment reports unavailable account features precisely', f
     ))->toBeFalse()
         ->and($provider->getLastError())
         ->toBe('List cPanel Git repositories failed: Git Version Control is not enabled for this account');
+});
+
+test('git status summaries reject malformed responses and hide remote errors', function (array $input, string $message): void {
+    $provider = cpanelProviderWithExistingDomain(new FakeCpanelApiClient);
+    $method = new ReflectionMethod($provider, 'scopeGitDeploymentStatus');
+    expect($method->invoke($provider, $input, null))->toBe([
+        'available' => false,
+        'error' => $message,
+    ]);
+})->with([
+    [['available' => false, 'error' => 'private-status-token'], 'cPanel Git deployment status is unavailable.'],
+    [['available' => true, 'data' => 'private-status-token'], 'cPanel Git deployment status is unreadable.'],
+    [['available' => true, 'data' => ['command' => 'private-status-token']], 'cPanel Git deployment status is unreadable.'],
+    [['available' => true, 'data' => ['private-status-token']], 'cPanel Git deployment status is unreadable.'],
+]);
+
+test('git status without a saved task still filters raw output', function (): void {
+    $provider = cpanelProviderWithExistingDomain(new FakeCpanelApiClient);
+    $method = new ReflectionMethod($provider, 'scopeGitDeploymentStatus');
+    expect($method->invoke($provider, [
+        'available' => true,
+        'data' => [[
+            'task_id' => 12,
+            'state' => 'succeeded',
+            'output' => 'private-status-token',
+            'timestamps' => ['succeeded' => 123, 'command' => 'private-status-token'],
+        ]],
+    ], null))->toBe([
+        'available' => true,
+        'data' => [['task_id' => 12, 'state' => 'succeeded', 'timestamps' => ['succeeded' => 123]]],
+    ]);
 });

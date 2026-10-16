@@ -457,7 +457,7 @@ final class CpanelProvider implements
             'manifest_matches' => $manifestMatches,
             'applied_at' => $manifestMatches ? ($manifest['applied_at'] ?? null) : null,
             'runtime' => $manifestMatches ? ($manifest['runtime'] ?? null) : null,
-            'deployment' => $manifestMatches ? ($manifest['deployment'] ?? null) : null,
+            'deployment' => $manifestMatches ? $this->deploymentStatusSummary($manifest['deployment'] ?? null) : null,
             'previous_release' => $manifestMatches ? ($manifest['previous_release'] ?? null) : null,
             'deployment_status' => $deploymentStatus,
             'domain_status' => $this->optionalApiResult($domainResult),
@@ -1277,6 +1277,34 @@ final class CpanelProvider implements
         } while (true);
     }
 
+    /** @return array<string, mixed>|null */
+    private function deploymentStatusSummary(mixed $deployment): ?array
+    {
+        if (! \is_array($deployment)) {
+            return null;
+        }
+
+        $summary = [];
+        foreach (['method', 'repository_root', 'task_id', 'deploy_id', 'state', 'status'] as $key) {
+            if (isset($deployment[$key]) && (\is_string($deployment[$key]) || \is_int($deployment[$key]))) {
+                $summary[$key] = $deployment[$key];
+            }
+        }
+        if (\is_array($deployment['task'] ?? null)) {
+            $summary['task'] = $this->deploymentStatusSummary($deployment['task']);
+        }
+        if (\is_array($deployment['timestamps'] ?? null)) {
+            foreach (['queued', 'started', 'succeeded', 'failed', 'cancelled'] as $key) {
+                $value = $deployment['timestamps'][$key] ?? null;
+                if (\is_string($value) || \is_int($value)) {
+                    $summary['timestamps'][$key] = $value;
+                }
+            }
+        }
+
+        return $summary;
+    }
+
     /**
      * @param array{available: bool, data: mixed, error?: string}|null $status
      *
@@ -1284,17 +1312,28 @@ final class CpanelProvider implements
      */
     private function scopeGitDeploymentStatus(?array $status, mixed $task): ?array
     {
-        if ($status === null
-            || ! \is_array($task)
-            || ! $this->hasGitDeploymentIdentifier($task)
-            || ! \is_array($status['data'] ?? null)) {
-            return $status;
+        if ($status === null) {
+            return null;
+        }
+        if (! ($status['available'] ?? false)) {
+            return ['available' => false, 'error' => 'cPanel Git deployment status is unavailable.'];
+        }
+        if (! \is_array($status['data'] ?? null) || ! \array_is_list($status['data'])) {
+            return ['available' => false, 'error' => 'cPanel Git deployment status is unreadable.'];
         }
 
-        $status['data'] = \array_values(\array_filter(
-            $status['data'],
-            fn (mixed $record): bool => \is_array($record) && $this->matchesGitDeploymentTask($record, $task),
-        ));
+        $records = [];
+        foreach ($status['data'] as $record) {
+            if (! \is_array($record)) {
+                return ['available' => false, 'error' => 'cPanel Git deployment status is unreadable.'];
+            }
+            if (\is_array($task) && $this->hasGitDeploymentIdentifier($task)
+                && ! $this->matchesGitDeploymentTask($record, $task)) {
+                continue;
+            }
+            $records[] = $this->deploymentStatusSummary($record);
+        }
+        $status['data'] = $records;
 
         return $status;
     }
