@@ -2,6 +2,9 @@
 
 Deploy and operate applications on cPanel accounts from Shipper CLI.
 
+Uploaded files must have complete matching cPanel acceptance reports. See
+[upload verification](docs/upload-verification.md) for checks and limits.
+
 ## Install
 
 ```bash

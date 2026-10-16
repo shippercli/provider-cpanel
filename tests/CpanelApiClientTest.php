@@ -135,7 +135,7 @@ test('encodes repeated UAPI parameters without bracket syntax', function (): voi
 test('uploads files through authenticated multipart UAPI without double-closing the stream', function (): void {
     $history = [];
     $client = cpanelTestClient([
-        new Response(200, [], '{"status":1,"data":{"uploads":[{"file":"release.zip"}]}}'),
+        new Response(200, [], '{"status":1,"data":{"failed":0,"succeeded":1,"uploads":[{"file":"release.zip","status":1,"size":18}]}}'),
     ], $history);
     $api = new CpanelApiClient([
         'host' => 'cpanel.example.com',
@@ -161,7 +161,7 @@ test('uploads files through authenticated multipart UAPI without double-closing 
 test('uploads multiple files in one authenticated multipart request', function (): void {
     $history = [];
     $client = cpanelTestClient([
-        new Response(200, [], '{"status":1,"data":{"failed":0,"uploads":[{"file":"a.txt","status":1},{"file":"b.txt","status":1}]}}'),
+        new Response(200, [], '{"status":1,"data":{"failed":0,"succeeded":2,"uploads":[{"file":"a.txt","status":1,"size":5},{"file":"b.txt","status":1,"size":6}]}}'),
     ], $history);
     $api = new CpanelApiClient([
         'host' => 'cpanel.example.com',
