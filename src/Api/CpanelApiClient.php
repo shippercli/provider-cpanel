@@ -172,12 +172,12 @@ final class CpanelApiClient implements CpanelApiClientInterface
             );
 
             $result = $this->normalizeResponse($this->decode((string) $response->getBody()), 'uapi');
+            $data = \is_array($result['data']) ? $result['data'] : [];
+            $uploads = \is_array($data['uploads'] ?? null) ? $data['uploads'] : [];
             if ($result['success'] && ! $this->uploadReportMatches($result['data'], $expectedSizes)) {
                 return $this->failedResponse('cPanel upload response did not confirm every requested file');
             }
 
-            $data = \is_array($result['data']) ? $result['data'] : [];
-            $uploads = \is_array($data['uploads'] ?? null) ? $data['uploads'] : [];
             if ($result['success'] && (int) ($data['failed'] ?? 0) > 0) {
                 $result['success'] = false;
                 $result['message'] = $this->findValueByKeys($uploads, ['reason', 'error']) ?? 'cPanel file upload failed';
