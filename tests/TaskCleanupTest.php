@@ -17,6 +17,7 @@ function rollbackTaskFixture(array $config = []): array
         $client->success([['file' => '20260727010101-deadbeef.tar.gz', 'type' => 'file']]),
         $client->success([]),
     ];
+    $client->responses['uapi:Fileman:get_file_content'] = $client->success(['content' => "0\n"]);
     $client->responses['api2:Cron:add_line'] = $client->success([['linekey' => '92']]);
     return [$client, cpanelProviderWithExistingDomain($client, $config), new CpanelTestProject('.'),
         new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app'])];
@@ -47,13 +48,14 @@ test('acknowledged task removal precedes marker deletion', function (): void {
             $remove = $index;
         }
         if ($call['module'] === 'Fileman' && $call['function'] === 'fileop' && $call['parameters']['op'] === 'unlink') {
+            expect($remove)->not->toBeNull()->and($index)->toBeGreaterThan($remove);
             $unlinks[] = $index;
         }
     }
-    expect($remove)->not->toBeNull()->and($unlinks)->toHaveCount(2);
-    foreach ($unlinks as $index) {
-        expect($index)->toBeGreaterThan($remove);
-    }
+    $tasks = cpanelProviderCalls($client, 'api2', 'Cron', 'add_line');
+    expect($tasks)->not->toBeEmpty()
+        ->and(cpanelProviderCalls($client, 'api2', 'Cron', 'remove_line'))->toHaveCount(count($tasks))
+        ->and($unlinks)->toHaveCount(2 * count($tasks));
 });
 
 test('the generated task wrapper does not rerun while its completion marker is retained', function (): void {
