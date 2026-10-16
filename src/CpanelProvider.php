@@ -855,14 +855,17 @@ final class CpanelProvider implements
                 throw new RuntimeException("{$label} failed with exit code {$status}{$details}");
             }
         } finally {
-            $this->api()->api2('Cron', 'remove_line', ['linekey' => (string) $linekey]);
+            $this->required(
+                $this->api()->api2('Cron', 'remove_line', ['linekey' => (string) $linekey]),
+                "Remove cPanel task schedule for {$label}",
+            );
 
             if ($status === 0) {
                 foreach ([$statusFile, $logFile] as $file) {
-                    $this->api()->api2('Fileman', 'fileop', [
+                    $this->required($this->api()->api2('Fileman', 'fileop', [
                         'op' => 'unlink',
                         'sourcefiles' => $this->relativeHomePath($file),
-                    ]);
+                    ]), "Remove completed cPanel task file for {$label}");
                 }
             }
         }
