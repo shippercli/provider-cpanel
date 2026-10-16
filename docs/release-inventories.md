@@ -107,3 +107,14 @@ exercise confirmed cleanup, interrupted cleanup retry, changed-active refusal an
 previous-tree symlink refusal. These are process-interruption checks, not proof
 of power-loss durability or live cPanel behavior. Shared apply/destroy locking
 and automatic cleanup policy remain unfinished.
+
+### Distribution check
+
+`python3 tests/package/verify-dist.py` builds an actual Composer ZIP, verifies
+that runtime source and the restore helper are included, and verifies that
+`vendor/`, tests and CI files are excluded. It extracts the archive, loads that
+provider class in a fresh PHP process from an unrelated working directory, and
+checks that its packaged helper is uploaded intact and scheduled with its digest.
+The helper also starts from the extracted package. Dependencies and fake API
+fixtures come from the installed source checkout; this test does not contact a
+live account or establish a fresh production Composer installation.

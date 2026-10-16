@@ -40,6 +40,9 @@ jobs:
       - name: Validate release archive inspection
         run: python3 tests/archive/test_validate_release.py
 
+      - name: Verify packaged restore resources
+        run: python3 tests/package/verify-dist.py
+
       - name: Run tests
         run: composer test
 
