@@ -926,6 +926,11 @@ final class CpanelProvider implements
                         'name' => $user,
                         'password' => $password,
                     ]), "Create PostgreSQL user {$user}");
+                } elseif ($user !== '' && $password !== '' && $this->boolDatabaseOption($database, 'update_password', false)) {
+                    $this->required($this->api()->uapi('Postgresql', 'set_password', [
+                        'user' => $user,
+                        'password' => $password,
+                    ]), "Update PostgreSQL user {$user}");
                 }
 
                 if ($user !== '') {
