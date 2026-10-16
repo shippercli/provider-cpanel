@@ -17,6 +17,14 @@ spec.loader.exec_module(validator)
 
 
 class ReleaseValidationTest(unittest.TestCase):
+    def test_usage_documents_supported_restore_modes(self):
+        helper = Path(__file__).parents[2] / 'resources/validate-release.py'
+        result = subprocess.run([sys.executable, str(helper)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('--restore ARCHIVE STAGE ACTIVE HOME PROJECT PROFILE DOMAIN', result.stderr)
+        self.assertIn('--recover STAGE', result.stderr)
+        self.assertIn('--cleanup STAGE', result.stderr)
+
     def inspect(self, entries):
         with tempfile.TemporaryDirectory() as directory:
             archive = Path(directory) / 'release.tar.gz'

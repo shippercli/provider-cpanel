@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Validate a gzip tar release and optionally build a private staged tree.
+"""Validate and safely restore a gzip tar release through a private staging tree.
 
-Not yet wired into remote rollback. The caller must supply a trusted staging
-parent and restore the completed tree without traversing existing target links.
+The cPanel provider uploads this helper, verifies its digest before execution,
+and supplies account-scoped archive, staging, deployment, and identity paths.
 """
 import gzip
 import fcntl
@@ -479,7 +479,7 @@ def main():
     promote = len(sys.argv) == 4 and sys.argv[1] == '--promote'
     stage = len(sys.argv) == 4 and sys.argv[2] == '--stage'
     if len(sys.argv) != 2 and not promote and not stage and not restore and not recover and not cleanup:
-        print('Usage: validate-release.py ARCHIVE [--stage NEW_DIRECTORY] | --promote STAGE ACTIVE', file=sys.stderr)
+        print('Usage: validate-release.py ARCHIVE [--stage NEW_DIRECTORY] | --promote STAGE ACTIVE | --restore ARCHIVE STAGE ACTIVE HOME PROJECT PROFILE DOMAIN | --recover STAGE | --cleanup STAGE', file=sys.stderr)
         return 2
     try:
         if recover:
