@@ -1710,6 +1710,11 @@ final class CpanelProvider implements
             || ! \is_string($manifest['profile'] ?? null) || $manifest['profile'] === '') {
             throw new RuntimeException('The cPanel Shipper manifest is corrupt or lacks deployment identity; review it before retrying.');
         }
+        if (! \is_array($manifest['domain'] ?? null)
+            || ! \is_string($manifest['domain']['domain'] ?? null)
+            || \trim($manifest['domain']['domain']) === '') {
+            throw new RuntimeException('The cPanel Shipper manifest lacks a valid target domain; review and migrate its ownership evidence before retrying.');
+        }
 
         return $manifest;
     }
@@ -1721,8 +1726,7 @@ final class CpanelProvider implements
     {
         return ($manifest['project'] ?? null) === $this->projectName($project)
             && ($manifest['profile'] ?? null) === $this->profileName($profile)
-            && (! isset($manifest['domain']['domain'])
-                || $manifest['domain']['domain'] === $this->domain($profile));
+            && ($manifest['domain']['domain'] ?? null) === $this->domain($profile);
     }
 
     /**

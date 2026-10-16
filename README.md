@@ -80,6 +80,13 @@ only exist in cPanel API 2, and optional privileged WHM API operations. See the
 
 ### Plan ownership inspection
 
+Manifests must include a nonempty target domain in `domain.domain`, alongside
+project and profile identity. Missing or malformed domain evidence requires
+operator review and migration before use; `adopt_existing` does not bypass an
+invalid manifest. Review the actual deployment path, domain, project/profile,
+and recorded resources before restoring this evidence. Shipper does not infer
+the domain from the current command or automatically rewrite the manifest.
+
 Planning reads the deployment manifest and, when no manifest exists, domain
 inventory. It blocks a mismatched/corrupt/unreadable manifest or an existing
 domain without the explicit reviewed `adopt_existing: true` setting. Planning

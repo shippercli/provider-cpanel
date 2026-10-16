@@ -875,7 +875,7 @@ test('destroy protects the account web root', function (): void {
         'content' => \json_encode([
             'project' => 'sample',
             'profile' => 'production',
-            'domain' => ['created' => false],
+            'domain' => ['domain' => 'example.com', 'created' => false],
             'deploy_path' => '/public_html',
         ], JSON_THROW_ON_ERROR),
     ]);
@@ -1025,6 +1025,7 @@ test('apply refuses to overwrite another deployment manifest', function (): void
         'content' => \json_encode([
             'project' => 'another-project',
             'profile' => 'production',
+            'domain' => ['domain' => 'app.example.com'],
             'deploy_path' => '/app',
         ], JSON_THROW_ON_ERROR),
     ]);
@@ -1050,6 +1051,7 @@ test('apply archives the previous managed release before deployment', function (
     $manifest = [
         'project' => 'sample',
         'profile' => 'production',
+        'domain' => ['domain' => 'app.example.com'],
         'deploy_path' => '/app',
     ];
     $client->responseQueues['uapi:Fileman:get_file_content'] = [
@@ -1087,6 +1089,7 @@ test('rollback restores a selected managed release archive', function (): void {
     $manifest = [
         'project' => 'sample',
         'profile' => 'production',
+        'domain' => ['domain' => 'app.example.com'],
         'deploy_path' => '/app',
     ];
     $release = '20260727010101-deadbeef.tar.gz';
@@ -1121,6 +1124,7 @@ test('status reports manifest deployment resource usage and releases', function 
         'content' => \json_encode([
             'project' => 'sample',
             'profile' => 'production',
+            'domain' => ['domain' => 'app.example.com'],
             'deploy_path' => '/app',
             'applied_at' => '2026-07-27T01:02:03+00:00',
             'runtime' => ['type' => 'php'],
