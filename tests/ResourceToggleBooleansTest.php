@@ -9,7 +9,7 @@ use ShipperCli\ProviderCpanel\Tests\Fixtures\FakeCpanelApiClient;
 function resourceToggleProfile(string $kind, mixed $value, string $runtimeType = 'static'): CpanelTestProfile
 {
     $config = ['domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => $runtimeType],
-        'cpanel' => ['archive_extraction' => 'direct', 'adopt_existing' => true]];
+        'cpanel' => ['archive_extraction' => 'direct', 'adopt_existing' => ['project' => 'sample', 'profile' => 'production', 'domain' => 'app.example.com']]];
     switch ($kind) {
         case 'runtime': $config['runtime']['install_dependencies'] = $value; break;
         case 'cpanel-runtime': $config['cpanel']['runtime'] = ['install_dependencies' => $value]; break;
@@ -96,7 +96,7 @@ test('a genuine cpanel runtime override replaces a shadowed invalid profile valu
     $project = new CpanelTestProject(cpanelProviderFixture(['index.html' => 'fixture', 'composer.json' => '{}']));
     $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app',
         'runtime' => ['type' => 'php', 'install_dependencies' => 'false'],
-        'cpanel' => ['adopt_existing' => true, 'archive_extraction' => 'direct', 'runtime' => ['install_dependencies' => false]]]);
+        'cpanel' => ['adopt_existing' => ['project' => 'sample', 'profile' => 'production', 'domain' => 'app.example.com'], 'archive_extraction' => 'direct', 'runtime' => ['install_dependencies' => false]]]);
     expect($provider->validate($project, $profile))->toBeEmpty()
         ->and($provider->apply($project, $profile))->toBeTrue()
         ->and(cpanelProviderCalls($client, 'api2', 'Cron', 'add_line'))->toBeEmpty();

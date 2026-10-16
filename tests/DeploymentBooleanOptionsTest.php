@@ -40,7 +40,7 @@ test('genuine clean booleans and the omitted default preserve cleanup choices', 
         $client->success([]),
     ];
     $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
-    $options = ['archive_extraction' => 'direct', 'adopt_existing' => true];
+    $options = ['archive_extraction' => 'direct', 'adopt_existing' => ['project' => 'sample', 'profile' => 'production', 'domain' => 'app.example.com']];
     if ($clean !== 'omitted') $options['clean'] = $clean;
     $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'], 'cpanel' => $options]);
     expect($provider->validate(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeEmpty()
@@ -51,7 +51,7 @@ test('genuine clean booleans and the omitted default preserve cleanup choices', 
 test('genuine backup flags preserve their plan actions', function (mixed $backup): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
-    $options = ['adopt_existing' => true];
+    $options = ['adopt_existing' => ['project' => 'sample', 'profile' => 'production', 'domain' => 'app.example.com']];
     if ($backup !== 'omitted') $options['backup_before_deploy'] = $backup;
     $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'cpanel' => $options]);
     $plan = $provider->plan(new CpanelTestProject(cpanelProviderFixture()), $profile);
