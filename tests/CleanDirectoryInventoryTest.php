@@ -17,6 +17,9 @@ test('unreadable or unsafe directory inventories stop deployment cleanup', funct
         ->and($client->uploadedFiles)->toBeEmpty();
 })->with([
     [null], [['dirs' => []]],
+    [[['file' => 'index.html ', 'type' => 'file']]],
+    [[['file' => "index.html\n", 'type' => 'file']]],
+    [[['file' => 'nested\\outside', 'type' => 'file']]],
     [[['file' => 'nested/unrelated.txt', 'type' => 'file']]],
     [[['file' => 'entry,/home/shipper/other', 'type' => 'file']]],
     [[['file' => '%2e%2e%2fother', 'type' => 'file']]],
@@ -44,3 +47,13 @@ test('valid directory inventories clean only exact children and preserve well-kn
     $operations = cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop');
     expect($operations)->toHaveCount(1)->and($operations[0]['parameters']['sourcefiles'])->toBe('app/index.html');
 })->with([true, false]);
+
+test('directory inventory API rejection stops deployment', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:Fileman:list_files'] = ['success' => false, 'message' => 'Permission denied', 'data' => null, 'raw' => []];
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'], 'cpanel' => ['archive_extraction' => 'direct']]);
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toBeEmpty()
+        ->and($client->uploadedFiles)->toBeEmpty();
+});
