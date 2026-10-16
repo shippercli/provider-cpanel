@@ -868,14 +868,9 @@ final class CpanelProvider implements
         }
     }
 
-    /**
-     * @return array{resources: array<int, array<string, mixed>>, environment: array<string, string>}
-     */
-    private function ensureDatabases(object $project, object $profile): array
+    /** @return array<string, array{bool, bool}> */
+    private function preflightDatabases(object $project, object $profile): array
     {
-        $resources = [];
-        $environment = [];
-
         $databases = $this->databaseConfigs($project, $profile);
         $states = [];
         $databaseNames = [];
@@ -903,7 +898,19 @@ final class CpanelProvider implements
             };
         }
 
+        return $states;
+    }
+
+    /**
+     * @return array{resources: array<int, array<string, mixed>>, environment: array<string, string>}
+     */
+    private function ensureDatabases(object $project, object $profile): array
+    {
+        $states = $this->preflightDatabases($project, $profile);
         $createdUsers = [];
+        $resources = [];
+        $environment = [];
+
         foreach ($this->databaseConfigs($project, $profile) as $index => $database) {
             $type = $database['type'];
             $name = $this->qualifiedDatabaseName($database['name']);
@@ -926,7 +933,6 @@ final class CpanelProvider implements
                         'name' => $user,
                         'password' => $password,
                     ]), "Create MySQL user {$user}");
-                    $createdUsers[$userKey] = true;
                 } elseif ($user !== '' && $password !== '' && $this->boolDatabaseOption($database, 'update_password', false)) {
                     $this->required($this->api()->uapi('Mysql', 'set_password', [
                         'user' => $user,
@@ -954,7 +960,6 @@ final class CpanelProvider implements
                         'name' => $user,
                         'password' => $password,
                     ]), "Create PostgreSQL user {$user}");
-                    $createdUsers[$userKey] = true;
                 }
 
                 if ($user !== '') {
@@ -965,6 +970,10 @@ final class CpanelProvider implements
                 }
             } else {
                 throw new RuntimeException("Unsupported cPanel database type: {$type}");
+            }
+
+            if ($user !== '' && ! $userExisted) {
+                $createdUsers[$userKey] = true;
             }
 
             $resources[] = [
