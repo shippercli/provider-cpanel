@@ -2208,15 +2208,38 @@ final class CpanelProvider implements
 
     private function cleanManagedDirectory(string $directory): void
     {
+        if (! $this->isSafeManagedPath($directory) || \strpbrk($directory, ',%\\') !== false
+            || \preg_match('/[\x00-\x1f\x7f]/', $directory)) {
+            throw new RuntimeException('Unsafe cPanel deployment directory inventory target');
+        }
         $result = $this->api()->uapi('Fileman', 'list_files', [
             'dir' => $directory,
             'show_hidden' => 1,
         ]);
-        if (! $result['success']) {
-            return;
+        $data = $this->required($result, 'Read cPanel deployment directory inventory');
+        if (\is_array($data) && ! \array_is_list($data)) {
+            if (! \is_array($data['dirs'] ?? null) || ! \array_is_list($data['dirs'])
+                || ! \is_array($data['files'] ?? null) || ! \array_is_list($data['files'])) {
+                throw new RuntimeException('Unreadable cPanel deployment directory inventory');
+            }
+            $data = [...$data['dirs'], ...$data['files']];
         }
-
-        $names = $this->fileNames($result['data']);
+        if (! \is_array($data) || ! \array_is_list($data)) {
+            throw new RuntimeException('Unreadable cPanel deployment directory inventory');
+        }
+        $names = [];
+        foreach ($data as $row) {
+            $name = \is_array($row) ? ($row['file'] ?? null) : null;
+            $type = \is_array($row) ? ($row['type'] ?? null) : null;
+            if (! \is_string($name) || $name === '' || \trim($name) !== $name || \basename($name) !== $name
+                || \strpbrk($name, ',%\\') !== false || \preg_match('/[\x00-\x1f\x7f]/', $name)
+                || ! \in_array($type, ['file', 'dir', 'char', 'block', 'fifo', 'link', 'socket'], true)
+                || isset($names[$name])) {
+                throw new RuntimeException('Unsafe or ambiguous cPanel deployment directory inventory');
+            }
+            $names[$name] = true;
+        }
+        $names = \array_keys($names);
         $managed = [];
         foreach ($names as $name) {
             if (\in_array($name, ['.', '..', '.well-known'], true)) {
@@ -3049,14 +3072,17 @@ final class CpanelProvider implements
     private function normalizeRemotePath(string $path): string
     {
         $path = '/'.\ltrim(\str_replace('\\', '/', \trim($path)), '/');
-        $segments = \explode('/', $path);
+        $segments = \array_values(\array_filter(
+            \explode('/', $path),
+            static fn (string $segment): bool => $segment !== '' && $segment !== '.',
+        ));
         foreach ($segments as $segment) {
             if ($segment === '..' || \str_contains($segment, "\0")) {
                 throw new RuntimeException('cPanel path traversal is not allowed');
             }
         }
 
-        return \rtrim($path, '/') ?: '/';
+        return '/'.\implode('/', $segments);
     }
 
     private function isSafeManagedPath(string $path): bool
