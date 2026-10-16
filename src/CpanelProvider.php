@@ -884,6 +884,7 @@ final class CpanelProvider implements
 
             if ($type === 'mysql') {
                 $databaseExisted = $this->mysqlDatabaseExists($name);
+                $userExisted = $user === '' ? true : $this->mysqlUserExists($user);
                 if (! $databaseExisted) {
                     $this->required(
                         $this->api()->uapi('Mysql', 'create_database', ['name' => $name]),
@@ -891,7 +892,6 @@ final class CpanelProvider implements
                     );
                 }
 
-                $userExisted = $user === '' ? true : $this->mysqlUserExists($user);
                 if ($user !== '' && ! $userExisted) {
                     $this->required($this->api()->uapi('Mysql', 'create_user', [
                         'name' => $user,
@@ -913,6 +913,7 @@ final class CpanelProvider implements
                 }
             } elseif ($type === 'postgresql') {
                 $databaseExisted = $this->postgresDatabaseExists($name);
+                $userExisted = $user === '' ? true : $this->postgresUserExists($user);
                 if (! $databaseExisted) {
                     $this->required(
                         $this->api()->uapi('Postgresql', 'create_database', ['name' => $name]),
@@ -920,7 +921,6 @@ final class CpanelProvider implements
                     );
                 }
 
-                $userExisted = $user === '' ? true : $this->postgresUserExists($user);
                 if ($user !== '' && ! $userExisted) {
                     $this->required($this->api()->uapi('Postgresql', 'create_user', [
                         'name' => $user,
@@ -2958,36 +2958,56 @@ final class CpanelProvider implements
         return null;
     }
 
+    private function databaseInventoryContains(mixed $data, string $field, string $name, string $label, bool $stringEntries = false): bool
+    {
+        if (! \is_array($data) || ! \array_is_list($data)) {
+            throw new RuntimeException("Unreadable {$label} inventory");
+        }
+
+        $names = [];
+        foreach ($data as $row) {
+            if ($stringEntries && \is_string($row)) {
+                $identity = $row;
+            } elseif (\is_array($row)) {
+                $identity = $row[$field] ?? $row['name'] ?? null;
+            } else {
+                throw new RuntimeException("Unreadable {$label} inventory");
+            }
+            if (! \is_string($identity) || $identity === '' || \in_array($identity, $names, true)) {
+                throw new RuntimeException("Unreadable or ambiguous {$label} inventory");
+            }
+            $names[] = $identity;
+        }
+
+        return \in_array($name, $names, true);
+    }
+
     private function mysqlDatabaseExists(string $name): bool
     {
         $data = $this->required($this->api()->uapi('Mysql', 'list_databases'), 'List MySQL databases');
 
-        return $this->containsValueAtKey($data, 'database', $name)
-            || $this->containsValueAtKey($data, 'name', $name);
+        return $this->databaseInventoryContains($data, 'database', $name, 'MySQL database');
     }
 
     private function mysqlUserExists(string $name): bool
     {
         $data = $this->required($this->api()->uapi('Mysql', 'list_users'), 'List MySQL users');
 
-        return $this->containsValueAtKey($data, 'user', $name)
-            || $this->containsValueAtKey($data, 'name', $name);
+        return $this->databaseInventoryContains($data, 'user', $name, 'MySQL user');
     }
 
     private function postgresDatabaseExists(string $name): bool
     {
         $data = $this->required($this->api()->uapi('Postgresql', 'list_databases'), 'List PostgreSQL databases');
 
-        return $this->containsValueAtKey($data, 'database', $name)
-            || $this->containsValueAtKey($data, 'name', $name);
+        return $this->databaseInventoryContains($data, 'database', $name, 'PostgreSQL database');
     }
 
     private function postgresUserExists(string $name): bool
     {
         $data = $this->required($this->api()->uapi('Postgresql', 'list_users'), 'List PostgreSQL users');
 
-        return $this->containsValueAtKey($data, 'user', $name)
-            || $this->containsValueAtKey($data, 'name', $name);
+        return $this->databaseInventoryContains($data, 'user', $name, 'PostgreSQL user', true);
     }
 
     /**

@@ -11,6 +11,16 @@ composer require shippercli/provider-cpanel
 Shipper discovers the provider through Composer's plugin metadata. No cPanel
 implementation is bundled into the CLI.
 
+## Database inventory safety
+
+Database and user inventories must be readable lists with unambiguous nonempty
+identities. Missing, malformed, or duplicate inventory data fails apply instead
+of being treated as an empty account. Both inventories for each configured
+database are read before creating that database or modifying its user.
+PostgreSQL usernames use the documented array of strings; object rows remain
+accepted for compatibility. This is a per-database check, not a transaction or
+preflight of all deployment resources. Live account verification is required.
+
 ## Configure
 
 Use a cPanel API token when the hosting provider allows one. Password

@@ -105,6 +105,13 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
             return \array_shift($this->responseQueues[$key]);
         }
 
+        if (\in_array($key, [
+            'uapi:Mysql:list_databases', 'uapi:Mysql:list_users',
+            'uapi:Postgresql:list_databases', 'uapi:Postgresql:list_users',
+        ], true)) {
+            return $this->responses[$key] ?? $this->success([]);
+        }
+
         return $this->responses[$key] ?? $this->success();
     }
 }
