@@ -94,3 +94,35 @@ test('the generated task wrapper does not rerun while its completion marker is r
         rmdir($home);
     }
 });
+
+test('a cancellation marker prevents a delayed cron task from starting', function (): void {
+    $home = sys_get_temp_dir().'/shipper-task-cancel-'.bin2hex(random_bytes(6));
+    mkdir($home, 0700);
+    $counter = $home.'/counter';
+    $statusFile = $home.'/.shipper-task-timeout.status';
+    $logFile = $home.'/.shipper-task-timeout.log';
+    $lockDirectory = $home.'/.shipper-task-timeout.lock';
+    $command = "printf x >> ".escapeshellarg($counter);
+
+    try {
+        [$client, $provider] = rollbackTaskFixture(['home_directory' => $home]);
+        $cancel = new ReflectionMethod($provider, 'markOneTimeCommandCancelled');
+        $cancel->invoke($provider, $statusFile);
+        $marker = $client->uploadedFiles[basename($statusFile)] ?? null;
+        expect($marker)->toBe("125\n");
+        file_put_contents($statusFile, $marker);
+
+        $build = new ReflectionMethod($provider, 'oneTimeCommandScript');
+        $script = $build->invoke($provider, $command, $statusFile, $logFile, $lockDirectory);
+        exec($script, $output, $firstStatus);
+        exec($script, $output, $secondStatus);
+
+        expect($firstStatus)->toBe(0)->and($secondStatus)->toBe(0)
+            ->and(file_exists($counter))->toBeFalse();
+    } finally {
+        foreach (array_merge(glob($home.'/*'), glob($home.'/.*')) as $file) {
+            if (is_file($file)) unlink($file);
+        }
+        rmdir($home);
+    }
+});

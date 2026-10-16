@@ -794,12 +794,7 @@ final class CpanelProvider implements
         $statusFile = $this->absolutePath('/'.$task.'.status');
         $logFile = $this->absolutePath('/'.$task.'.log');
         $lockDirectory = $this->absolutePath('/'.$task.'.lock');
-        $script = 'if [ ! -f '.\escapeshellarg($statusFile).' ]'
-            .' && mkdir '.\escapeshellarg($lockDirectory).' 2>/dev/null; then '
-            .'if ('.$command.') > '.\escapeshellarg($logFile).' 2>&1; '
-            .'then status=0; else status=$?; fi; '
-            .'echo "$status" > '.\escapeshellarg($statusFile).'; '
-            .'rmdir '.\escapeshellarg($lockDirectory).' 2>/dev/null || true; fi';
+        $script = $this->oneTimeCommandScript($command, $statusFile, $logFile, $lockDirectory);
         $cron = $this->required($this->api()->api2('Cron', 'add_line', [
             'command' => '/bin/sh -c '.\escapeshellarg($script),
             'day' => '*',
@@ -855,20 +850,59 @@ final class CpanelProvider implements
                 throw new RuntimeException("{$label} failed with exit code {$status}{$details}");
             }
         } finally {
-            $this->required(
-                $this->api()->api2('Cron', 'remove_line', ['linekey' => (string) $linekey]),
-                "Remove cPanel task schedule for {$label}",
-            );
-
-            if ($status === 0) {
-                foreach ([$statusFile, $logFile] as $file) {
-                    $this->required($this->api()->api2('Fileman', 'fileop', [
-                        'op' => 'unlink',
-                        'sourcefiles' => $this->relativeHomePath($file),
-                    ]), "Remove completed cPanel task file for {$label}");
+            $cleanupErrors = [];
+            if ($status === null) {
+                try {
+                    $this->markOneTimeCommandCancelled($statusFile);
+                } catch (Throwable $error) {
+                    $cleanupErrors[] = $error;
                 }
             }
+
+            $scheduleRemoved = false;
+            try {
+                $this->required(
+                    $this->api()->api2('Cron', 'remove_line', ['linekey' => (string) $linekey]),
+                    "Remove cPanel task schedule for {$label}",
+                );
+                $scheduleRemoved = true;
+            } catch (Throwable $error) {
+                $cleanupErrors[] = $error;
+            }
+
+            if ($status === 0 && $scheduleRemoved) {
+                foreach ([$statusFile, $logFile] as $file) {
+                    try {
+                        $this->required($this->api()->api2('Fileman', 'fileop', [
+                            'op' => 'unlink',
+                            'sourcefiles' => $this->relativeHomePath($file),
+                        ]), "Remove completed cPanel task file for {$label}");
+                    } catch (Throwable $error) {
+                        $cleanupErrors[] = $error;
+                    }
+                }
+            }
+
+            if ($cleanupErrors !== []) {
+                $messages = \array_map(static fn (Throwable $error): string => $error->getMessage(), $cleanupErrors);
+                throw new RuntimeException(\implode('; ', $messages), 0, $cleanupErrors[0]);
+            }
         }
+    }
+
+    private function oneTimeCommandScript(string $command, string $statusFile, string $logFile, string $lockDirectory): string
+    {
+        return 'if [ ! -f '.\escapeshellarg($statusFile).' ]'
+            .' && mkdir '.\escapeshellarg($lockDirectory).' 2>/dev/null; then '
+            .'if ('.$command.') > '.\escapeshellarg($logFile).' 2>&1; '
+            .'then status=0; else status=$?; fi; '
+            .'echo "$status" > '.\escapeshellarg($statusFile).'; '
+            .'rmdir '.\escapeshellarg($lockDirectory).' 2>/dev/null || true; fi';
+    }
+
+    private function markOneTimeCommandCancelled(string $statusFile): void
+    {
+        $this->uploadContent(\dirname($statusFile), \basename($statusFile), "125\n", 'Mark incomplete cPanel task as cancelled');
     }
 
     /**
