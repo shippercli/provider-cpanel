@@ -2239,6 +2239,32 @@ final class CpanelProvider implements
         return \array_map('strval', \array_keys($names));
     }
 
+    private function assertCleanupDirectoryAncestry(string $directory): void
+    {
+        $home = $this->resolveHomeDirectory();
+        $absolute = $this->absolutePath($directory);
+        if (! \str_starts_with($absolute, $home.'/')) {
+            throw new RuntimeException('Unsafe cPanel deployment directory ancestry');
+        }
+        $paths = [$home];
+        $current = $home;
+        foreach (\explode('/', \substr($absolute, \strlen($home) + 1)) as $segment) {
+            $current .= '/'.$segment;
+            $paths[] = $current;
+        }
+        foreach ($paths as $path) {
+            $data = $this->required($this->api()->uapi('Fileman', 'get_file_information', [
+                'path' => $path,
+                'include_permissions' => 1,
+            ]), 'Read cPanel deployment directory ancestry');
+            if (! \is_array($data) || ($data['type'] ?? null) !== 'dir'
+                || ! \in_array($data['exists'] ?? null, [1, '1'], true)
+                || ($data['fullpath'] ?? null) !== $path) {
+                throw new RuntimeException('Unsafe or unreadable cPanel deployment directory ancestry; expected existing directories with matching paths');
+            }
+        }
+    }
+
     private function cleanManagedDirectory(string $directory): void
     {
         if (! $this->isSafeManagedPath($directory) || \strpbrk($directory, ',%\\') !== false
@@ -2257,6 +2283,8 @@ final class CpanelProvider implements
         if ($managed === []) {
             return;
         }
+
+        $this->assertCleanupDirectoryAncestry($directory);
 
         $this->required($this->api()->api2('Fileman', 'fileop', [
             'op' => 'trash',
