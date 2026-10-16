@@ -1450,12 +1450,27 @@ final class CpanelProvider implements
             $lines[] = $name.'='.\json_encode($value, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
         }
 
+        $filename = $this->stringCpanelOption($profile, 'environment_filename', '.env');
+        $contents = \implode("\n", $lines)."\n";
         $this->uploadContent(
             $directory,
-            $this->stringCpanelOption($profile, 'environment_filename', '.env'),
-            \implode("\n", $lines)."\n",
+            $filename,
+            $contents,
             'Write cPanel environment file',
         );
+
+        $result = $this->api()->uapi('Fileman', 'get_file_content', [
+            'dir' => $this->relativeHomePath($directory),
+            'file' => $filename,
+            'from_charset' => 'utf-8',
+            'to_charset' => 'utf-8',
+        ]);
+        $remoteContents = $result['success']
+            ? $this->findValueAtKey($result['data'], 'content')
+            : null;
+        if (! \is_string($remoteContents) || ! \hash_equals($contents, $remoteContents)) {
+            throw new RuntimeException('cPanel environment file readback did not match the uploaded content');
+        }
     }
 
     /**

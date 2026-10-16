@@ -34,6 +34,23 @@ test('all database connections reach the generated application environment', fun
         ->and(cpanelProviderCalls($client, 'uapi', 'Postgresql', 'create_user')[0]['parameters']['password'])->toBe('reports-secret');
 });
 
+test('environment file delivery is read back before apply continues', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, [
+        'deployment_method' => 'fileman',
+        'database_environment_prefixes' => ['app' => 'DB', 'reports' => 'REPORTS_DB'],
+    ]);
+    $client->readBackUploadedFiles = false;
+    $client->responseQueues['uapi:Fileman:get_file_content'] = [
+        $client->success(['content' => 'old manifest']),
+        $client->success(['content' => 'DB_PASSWORD="main-secret"']),
+    ];
+
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), cpanelMultipleDatabaseProfile()))->toBeFalse()
+        ->and($provider->getLastError())->toContain('environment file readback did not match')
+        ->and(cpanelProviderCalls($client, 'uapi', 'PassengerApps', 'ensure_deps'))->toBe([]);
+});
+
 test('all database connections reach Passenger environment variables', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [
