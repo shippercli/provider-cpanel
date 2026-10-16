@@ -1,5 +1,8 @@
 # cPanel deployment operations
 
+[Account inventory validation](account-inventories.md) describes how unreadable
+mail and FTP inventories stop reconciliation.
+
 ## Status
 
 `shipper status` reports:
@@ -47,6 +50,3 @@ project and profile. It removes only resources recorded as Shipper-created:
 - the safe managed deployment path
 
 Account roots, `/`, and `/public_html` are protected from recursive deletion.
-
-[Account inventory validation](account-inventories.md) describes how unreadable
-mail and FTP inventories stop reconciliation.
