@@ -37,6 +37,9 @@ jobs:
       - name: Validate optimized autoloading
         run: composer dump-autoload --optimize --strict-psr
 
+      - name: Verify authenticated redirect rejection over HTTP
+        run: python3 tests/http/test_redirects.py
+
       - name: Run tests
         run: composer test
 
