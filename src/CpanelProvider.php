@@ -125,6 +125,12 @@ final class CpanelProvider implements
             $errors[] = 'Repository URL is required for cPanel Git deployment';
         }
 
+        try {
+            $this->assertDatabasePasswordOptions($profile);
+        } catch (RuntimeException $exception) {
+            $errors[] = $exception->getMessage();
+        }
+
         foreach ($this->databaseConfigs($project, $profile) as $database) {
             if (($database['user'] ?? '') !== '' && ($database['password'] ?? '') === '') {
                 $errors[] = "Database password is required for cPanel database user: {$database['user']}";
@@ -165,6 +171,7 @@ final class CpanelProvider implements
 
     public function plan(object $project, object $profile): array
     {
+        $this->assertDatabasePasswordOptions($profile);
         $domain = $this->domain($profile);
         $method = $this->deploymentMethod($project, $profile);
         $runtime = $this->runtimeConfig($project, $profile);
@@ -264,6 +271,7 @@ final class CpanelProvider implements
         $this->lastError = '';
 
         try {
+            $this->assertDatabasePasswordOptions($profile);
             $context = $this->context($project, $profile);
             $previousManifest = $this->readManifest($profile);
             if ($previousManifest !== null && ! $this->manifestMatches($previousManifest, $project, $profile)) {
@@ -2512,6 +2520,21 @@ final class CpanelProvider implements
         ];
     }
 
+    private function assertDatabasePasswordOptions(object $profile): void
+    {
+        $databases = $this->profileValue($profile, 'databases');
+        if (! \is_array($databases)) {
+            return;
+        }
+
+        foreach ($databases as $database) {
+            if (\is_array($database) && \array_key_exists('update_password', $database)
+                && ! \is_bool($database['update_password'])) {
+                throw new RuntimeException('Database update_password must be a boolean');
+            }
+        }
+    }
+
     /**
      * @return array<int, array{name: string, user: string, type: string, password: string, privileges: string, update_password?: bool}>
      */
@@ -2532,7 +2555,7 @@ final class CpanelProvider implements
                     'type' => \strtolower($this->arrayString($database, 'type', 'mysql')),
                     'password' => $this->arrayString($database, 'password', $this->stringConfig('database_password')),
                     'privileges' => $this->privilegeString($database['privileges'] ?? 'ALL PRIVILEGES'),
-                    'update_password' => (bool) ($database['update_password'] ?? false),
+                    'update_password' => ($database['update_password'] ?? false) === true,
                 ];
             }
 

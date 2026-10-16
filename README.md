@@ -15,7 +15,9 @@ implementation is bundled into the CLI.
 
 Profile database entries may set `update_password: true` to rotate an existing
 MySQL or PostgreSQL user's password before privileges and application deployment.
-If cPanel refuses that update, apply fails. The default is false: existing user
+Use an unquoted YAML boolean; strings, numbers, null, and other types are rejected
+by validation, planning, and direct apply before API calls. If cPanel refuses
+that update, apply fails. The default is false: existing user
 passwords are left unchanged, so the configured password must already be correct.
 This option affects the account-level database user and every application using
 that user; coordinate rotations of shared credentials. Newly created users get
