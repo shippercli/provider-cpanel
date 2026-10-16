@@ -1,10 +1,5 @@
 # cPanel deployment operations
 
-## API diagnostics
-
-See [API error responses](api-error-responses.md) for strict success flags and
-credential-safe handling of failed JSON payloads.
-
 ## Status
 
 `shipper status` reports:
@@ -15,6 +10,11 @@ credential-safe handling of failed JSON payloads.
 - domain inventory availability
 - account resource usage availability
 - deployment release identifiers
+
+## API diagnostics
+
+See [API error responses](api-error-responses.md) for strict success flags and
+credential-safe handling of failed JSON payloads.
 
 Optional cPanel modules are reported as unavailable instead of making the
 entire status command fail.
