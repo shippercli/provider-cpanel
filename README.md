@@ -2,15 +2,6 @@
 
 Deploy and operate applications on cPanel accounts from Shipper CLI.
 
-## Install
-
-```bash
-composer require shippercli/provider-cpanel
-```
-
-Shipper discovers the provider through Composer's plugin metadata. No cPanel
-implementation is bundled into the CLI.
-
 ## Database inventory safety
 
 Database and user inventories must be readable lists with unambiguous nonempty
@@ -20,6 +11,15 @@ database are read before creating that database or modifying its user.
 PostgreSQL usernames use the documented array of strings; object rows remain
 accepted for compatibility. This is a per-database check, not a transaction or
 preflight of all deployment resources. Live account verification is required.
+
+## Install
+
+```bash
+composer require shippercli/provider-cpanel
+```
+
+Shipper discovers the provider through Composer's plugin metadata. No cPanel
+implementation is bundled into the CLI.
 
 ## Configure
 

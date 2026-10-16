@@ -101,15 +101,16 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
     /** @return array{success: bool, message: string, data: mixed, raw: array<string, mixed>} */
     private function response(string $key): array
     {
-        if (($this->responseQueues[$key] ?? []) !== []) {
-            return \array_shift($this->responseQueues[$key]);
+        if (! \array_key_exists($key, $this->responses) && ($this->responseQueues[$key] ?? []) === []
+            && \in_array($key, [
+                'uapi:Mysql:list_databases', 'uapi:Mysql:list_users',
+                'uapi:Postgresql:list_databases', 'uapi:Postgresql:list_users',
+            ], true)) {
+            return $this->success([]);
         }
 
-        if (\in_array($key, [
-            'uapi:Mysql:list_databases', 'uapi:Mysql:list_users',
-            'uapi:Postgresql:list_databases', 'uapi:Postgresql:list_users',
-        ], true)) {
-            return $this->responses[$key] ?? $this->success([]);
+        if (($this->responseQueues[$key] ?? []) !== []) {
+            return \array_shift($this->responseQueues[$key]);
         }
 
         return $this->responses[$key] ?? $this->success();
