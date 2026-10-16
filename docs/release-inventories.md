@@ -22,7 +22,8 @@ backup and rollback verification remain required.
 
 During rollback safety-backup retention, the selected archive and the newly
 created backup are protected from pruning. Other archives outside the newest
-configured retention window are still pruned. The retained count can temporarily
-exceed the configured limit to preserve those two files; a later normal backup
-uses the usual retention policy. Protection does not prevent concurrent deletion
-or changes by another process.
+configured retention window (minimum one) are still pruned. The retained count
+can exceed that window to preserve protected files. The selected-archive pin
+applies only to the current rollback; a new backup is always protected during
+its own retention pass. Protection does not prevent concurrent deletion or
+changes by another process.
