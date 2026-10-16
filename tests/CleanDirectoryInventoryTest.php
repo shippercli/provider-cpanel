@@ -1,0 +1,157 @@
+<?php
+
+declare(strict_types=1);
+
+use ShipperCli\ProviderCpanel\Tests\Fixtures\CpanelTestProfile;
+use ShipperCli\ProviderCpanel\Tests\Fixtures\CpanelTestProject;
+use ShipperCli\ProviderCpanel\Tests\Fixtures\FakeCpanelApiClient;
+
+test('unreadable or unsafe directory inventories stop deployment cleanup', function (mixed $inventory): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:Fileman:list_files'] = $client->success($inventory);
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'], 'cpanel' => ['archive_extraction' => 'direct']]);
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+        ->and($provider->getLastError())->toContain('directory inventory')
+        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toBeEmpty()
+        ->and($client->uploadedFiles)->toBeEmpty();
+})->with([
+    [null], [['dirs' => []]],
+    [[['file' => 'index.html ', 'type' => 'file']]],
+    [[['file' => "index.html\n", 'type' => 'file']]],
+    [[['file' => 'nested\\outside', 'type' => 'file']]],
+    [[['file' => 'nested/unrelated.txt', 'type' => 'file']]],
+    [[['file' => 'entry,/home/shipper/other', 'type' => 'file']]],
+    [[['file' => '%2e%2e%2fother', 'type' => 'file']]],
+    [[['file' => 'index.html', 'type' => 'file'], ['file' => 'index.html', 'type' => 'file']]],
+    [[['metadata' => ['file' => 'unrelated.txt', 'type' => 'file']]]],
+]);
+
+test('directory cleanup refuses account roots and ambiguous directory paths', function (string $path): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:Fileman:list_files'] = $client->success([['file' => 'index.html', 'type' => 'file']]);
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => $path, 'runtime' => ['type' => 'static'], 'cpanel' => ['archive_extraction' => 'direct']]);
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toBeEmpty()
+        ->and($client->uploadedFiles)->toBeEmpty();
+})->with(['/', '/public_html', '/public_html/.', '/public_html//.', '/home/shipper', '/home/shipper/.', '/home/shipper/public_html', '/home/shipper/public_html/.', '/app,other', '/app%2fother']);
+
+test('valid directory inventories clean only exact children and preserve well-known', function (bool $mapping): void {
+    $client = new FakeCpanelApiClient;
+    $rows = [['file' => 'index.html', 'type' => 'file'], ['file' => '.well-known', 'type' => 'dir']];
+    $client->responseQueues['uapi:Fileman:list_files'] = [
+        $client->success($mapping ? ['dirs' => [$rows[1]], 'files' => [$rows[0]]] : $rows),
+        $client->success([['file' => '.well-known', 'type' => 'dir']]),
+    ];
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'], 'cpanel' => ['archive_extraction' => 'direct']]);
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeTrue();
+    $operations = cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop');
+    expect($operations)->toHaveCount(1)->and($operations[0]['parameters']['sourcefiles'])->toBe('app/index.html');
+})->with([true, false]);
+
+test('directory inventory API rejection stops deployment', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:Fileman:list_files'] = ['success' => false, 'message' => 'Permission denied', 'data' => null, 'raw' => []];
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'], 'cpanel' => ['archive_extraction' => 'direct']]);
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toBeEmpty()
+        ->and($client->uploadedFiles)->toBeEmpty();
+});
+
+
+test('cleanup does not report success when trash acknowledgement leaves files behind', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:Fileman:list_files'] = $client->success([['file' => 'index.html', 'type' => 'file']]);
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'], 'cpanel' => ['archive_extraction' => 'direct']]);
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+        ->and($provider->getLastError())->toContain('directory cleanup could not be verified')
+        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toHaveCount(1)
+        ->and($client->uploadedFiles)->toBeEmpty();
+});
+
+
+test('unreadable post-trash inventories stop before upload', function (mixed $remaining): void {
+    $client = new FakeCpanelApiClient;
+    $client->responseQueues['uapi:Fileman:list_files'] = [
+        $client->success([['file' => 'old.html', 'type' => 'file']]),
+        $client->success($remaining),
+    ];
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'], 'cpanel' => ['archive_extraction' => 'direct']]);
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+        ->and($provider->getLastError())->toContain('directory inventory')
+        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toHaveCount(1)
+        ->and($client->uploadedFiles)->toBeEmpty();
+})->with([[null], [['dirs' => []]], [[['file' => '../outside', 'type' => 'file']]]]);
+
+
+test('cleanup refuses to continue if a protected entry disappears', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responseQueues['uapi:Fileman:list_files'] = [
+        $client->success([['file' => 'old.html', 'type' => 'file'], ['file' => '.well-known', 'type' => 'dir']]),
+        $client->success([]),
+    ];
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'], 'cpanel' => ['archive_extraction' => 'direct']]);
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+        ->and($provider->getLastError())->toContain('protected .well-known is missing')
+        ->and($client->uploadedFiles)->toBeEmpty();
+});
+
+
+test('cleanup rejects symlink or unreadable directory ancestry before trash', function (array $metadata): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:Fileman:list_files'] = $client->success([['file' => 'old.html', 'type' => 'file']]);
+    $client->responseQueues['uapi:Fileman:get_file_information'] = [
+        $client->success(['exists' => 1, 'type' => 'dir', 'fullpath' => '/home/shipper']),
+        $client->success($metadata),
+    ];
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $failure = null;
+    try {
+        (new \ReflectionMethod($provider, 'cleanManagedDirectory'))->invoke($provider, '/app/nested');
+    } catch (\RuntimeException $exception) {
+        $failure = $exception;
+    }
+    expect($failure)->toBeInstanceOf(\RuntimeException::class);
+    expect($failure->getMessage())->toContain('directory ancestry')
+        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toBeEmpty()
+        ->and($client->uploadedFiles)->toBeEmpty();
+})->with([
+    [['exists' => 1, 'type' => 'link', 'fullpath' => '/home/shipper/app']],
+    [['exists' => 1, 'type' => 'file', 'fullpath' => '/home/shipper/app']],
+    [['exists' => 0, 'type' => 'dir', 'fullpath' => '/home/shipper/app']],
+    [['exists' => 1, 'type' => 'dir', 'fullpath' => '/home/shipper/other']],
+    [['type' => 'dir']],
+]);
+
+
+test('cleanup checks home every ancestor and target before trash', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responseQueues['uapi:Fileman:list_files'] = [
+        $client->success([['file' => 'old.html', 'type' => 'file']]),
+        $client->success([]),
+    ];
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    (new \ReflectionMethod($provider, 'cleanManagedDirectory'))->invoke($provider, '/app/nested');
+    $reads = cpanelProviderCalls($client, 'uapi', 'Fileman', 'get_file_information');
+    expect(array_column(array_column($reads, 'parameters'), 'path'))->toBe([
+        '/home/shipper', '/home/shipper/app', '/home/shipper/app/nested',
+    ])->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toHaveCount(1);
+});
+
+test('cleanup rejects failed ancestry metadata reads before trash', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:Fileman:list_files'] = $client->success([['file' => 'old.html', 'type' => 'file']]);
+    $client->responses['uapi:Fileman:get_file_information'] = ['success' => false, 'message' => 'Permission denied', 'data' => null, 'raw' => []];
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $failure = null;
+    try { (new \ReflectionMethod($provider, 'cleanManagedDirectory'))->invoke($provider, '/app'); }
+    catch (\RuntimeException $exception) { $failure = $exception; }
+    expect($failure)->toBeInstanceOf(\RuntimeException::class)
+        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toBeEmpty();
+});

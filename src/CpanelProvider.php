@@ -2206,17 +2206,72 @@ final class CpanelProvider implements
         ]), "Remove Shipper-managed cPanel releases for {$project} ({$profile})");
     }
 
-    private function cleanManagedDirectory(string $directory): void
+    /** @return list<string> */
+    private function managedDirectoryInventory(string $directory): array
     {
         $result = $this->api()->uapi('Fileman', 'list_files', [
             'dir' => $directory,
             'show_hidden' => 1,
         ]);
-        if (! $result['success']) {
-            return;
+        $data = $this->required($result, 'Read cPanel deployment directory inventory');
+        if (\is_array($data) && ! \array_is_list($data)) {
+            if (! \is_array($data['dirs'] ?? null) || ! \array_is_list($data['dirs'])
+                || ! \is_array($data['files'] ?? null) || ! \array_is_list($data['files'])) {
+                throw new RuntimeException('Unreadable cPanel deployment directory inventory');
+            }
+            $data = [...$data['dirs'], ...$data['files']];
         }
+        if (! \is_array($data) || ! \array_is_list($data)) {
+            throw new RuntimeException('Unreadable cPanel deployment directory inventory');
+        }
+        $names = [];
+        foreach ($data as $row) {
+            $name = \is_array($row) ? ($row['file'] ?? null) : null;
+            $type = \is_array($row) ? ($row['type'] ?? null) : null;
+            if (! \is_string($name) || $name === '' || \trim($name) !== $name || \basename($name) !== $name
+                || \strpbrk($name, ',%\\') !== false || \preg_match('/[\x00-\x1f\x7f]/', $name)
+                || ! \in_array($type, ['file', 'dir', 'char', 'block', 'fifo', 'link', 'socket'], true)
+                || isset($names[$name])) {
+                throw new RuntimeException('Unsafe or ambiguous cPanel deployment directory inventory');
+            }
+            $names[$name] = true;
+        }
+        return \array_map('strval', \array_keys($names));
+    }
 
-        $names = $this->fileNames($result['data']);
+    private function assertCleanupDirectoryAncestry(string $directory): void
+    {
+        $home = $this->resolveHomeDirectory();
+        $absolute = $this->absolutePath($directory);
+        if (! \str_starts_with($absolute, $home.'/')) {
+            throw new RuntimeException('Unsafe cPanel deployment directory ancestry');
+        }
+        $paths = [$home];
+        $current = $home;
+        foreach (\explode('/', \substr($absolute, \strlen($home) + 1)) as $segment) {
+            $current .= '/'.$segment;
+            $paths[] = $current;
+        }
+        foreach ($paths as $path) {
+            $data = $this->required($this->api()->uapi('Fileman', 'get_file_information', [
+                'path' => $path,
+                'include_permissions' => 1,
+            ]), 'Read cPanel deployment directory ancestry');
+            if (! \is_array($data) || ($data['type'] ?? null) !== 'dir'
+                || ! \in_array($data['exists'] ?? null, [1, '1'], true)
+                || ($data['fullpath'] ?? null) !== $path) {
+                throw new RuntimeException('Unsafe or unreadable cPanel deployment directory ancestry; expected existing directories with matching paths');
+            }
+        }
+    }
+
+    private function cleanManagedDirectory(string $directory): void
+    {
+        if (! $this->isSafeManagedPath($directory) || \strpbrk($directory, ',%\\') !== false
+            || \preg_match('/[\x00-\x1f\x7f]/', $directory)) {
+            throw new RuntimeException('Unsafe cPanel deployment directory inventory target');
+        }
+        $names = $this->managedDirectoryInventory($directory);
         $managed = [];
         foreach ($names as $name) {
             if (\in_array($name, ['.', '..', '.well-known'], true)) {
@@ -2229,11 +2284,22 @@ final class CpanelProvider implements
             return;
         }
 
+        $this->assertCleanupDirectoryAncestry($directory);
+
         $this->required($this->api()->api2('Fileman', 'fileop', [
             'op' => 'trash',
             'sourcefiles' => \implode(',', $managed),
             'doubledecode' => 1,
         ]), "Clean cPanel deployment directory {$directory}");
+        $remainingNames = $this->managedDirectoryInventory($directory);
+        if (\in_array('.well-known', $names, true) && ! \in_array('.well-known', $remainingNames, true)) {
+            throw new RuntimeException('cPanel deployment directory cleanup could not be verified; protected .well-known is missing');
+        }
+        foreach ($remainingNames as $remaining) {
+            if (! \in_array($remaining, ['.', '..', '.well-known'], true)) {
+                throw new RuntimeException('cPanel deployment directory cleanup could not be verified; files remain after trash operation');
+            }
+        }
     }
 
     private function ensureRemoteDirectory(string $directory): void
@@ -3049,14 +3115,17 @@ final class CpanelProvider implements
     private function normalizeRemotePath(string $path): string
     {
         $path = '/'.\ltrim(\str_replace('\\', '/', \trim($path)), '/');
-        $segments = \explode('/', $path);
+        $segments = \array_values(\array_filter(
+            \explode('/', $path),
+            static fn (string $segment): bool => $segment !== '' && $segment !== '.',
+        ));
         foreach ($segments as $segment) {
             if ($segment === '..' || \str_contains($segment, "\0")) {
                 throw new RuntimeException('cPanel path traversal is not allowed');
             }
         }
 
-        return \rtrim($path, '/') ?: '/';
+        return '/'.\implode('/', $segments);
     }
 
     private function isSafeManagedPath(string $path): bool

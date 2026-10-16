@@ -36,6 +36,9 @@ selected archive through a monitored account task.
 
 ## Destroy
 
+[Directory cleanup validation](directory-cleanup.md) explains inventory, root
+protection, and filename limits during apply and rollback.
+
 Destroy refuses to proceed without a manifest belonging to the requested
 project and profile. It removes only resources recorded as Shipper-created:
 
