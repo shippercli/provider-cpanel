@@ -8,6 +8,7 @@ import gzip
 import os
 from pathlib import Path
 import shutil
+import stat
 import sys
 import tarfile
 
@@ -176,17 +177,99 @@ def stage_release(archive_path, destination):
         raise
 
 
+def validate_tree(tree):
+    """Check the final staged filesystem, including preserved live resources."""
+    members = {}
+    def visit(directory, prefix):
+        with os.scandir(str(directory)) as entries:
+            for entry in entries:
+                key = prefix + (entry.name,)
+                components(entry.name)
+                info = entry.stat(follow_symlinks=False)
+                member = tarfile.TarInfo('/'.join(key))
+                if stat.S_ISLNK(info.st_mode):
+                    member.type = tarfile.SYMTYPE
+                    member.linkname = os.readlink(entry.path)
+                elif stat.S_ISDIR(info.st_mode):
+                    member.type = tarfile.DIRTYPE
+                elif stat.S_ISREG(info.st_mode):
+                    member.type = tarfile.REGTYPE
+                else:
+                    raise InvalidRelease('unsupported staged file type')
+                if info.st_mode & 0o7000:
+                    raise InvalidRelease('unsupported staged permission bits')
+                members[key] = member
+                if member.isdir():
+                    visit(Path(entry.path), key)
+    visit(tree, ())
+    for key, member in members.items():
+        if member.issym():
+            resolve_link(key, members, set())
+
+
+def remove_staged_entry(path):
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.exists():
+        # Only used within the newly created, private staging tree.
+        for root, directories, _ in os.walk(str(path), followlinks=False):
+            os.chmod(root, 0o700)
+            for directory in directories:
+                child = os.path.join(root, directory)
+                if not os.path.islink(child):
+                    os.chmod(child, 0o700)
+        shutil.rmtree(str(path))
+
+
+def promote_release(destination, active):
+    """Promote a prepared tree, retaining the old tree for recovery.
+
+    Parents must be trusted. This uses two renames, not a single atomic swap.
+    A process crash between the renames requires recovery from `previous`.
+    """
+    destination, active = Path(destination), Path(active)
+    tree, previous = destination / 'tree', destination / 'previous'
+    if destination.is_symlink() or not destination.is_dir() or destination.stat().st_mode & 0o077:
+        raise InvalidRelease('staging directory is not private')
+    if tree.is_symlink() or not tree.is_dir() or active.is_symlink() or not active.is_dir():
+        raise InvalidRelease('promotion requires real deployment directories')
+    stage_real, active_real = destination.resolve(), active.resolve()
+    if stage_real == active_real or stage_real in active_real.parents or active_real in stage_real.parents:
+        raise InvalidRelease('deployment and staging directories overlap')
+    if previous.exists() or previous.is_symlink():
+        raise InvalidRelease('previous deployment already exists')
+    preserved = active / '.well-known'
+    if preserved.exists() or preserved.is_symlink():
+        if preserved.is_symlink() or not preserved.is_dir():
+            raise InvalidRelease('live .well-known must be a real directory')
+        remove_staged_entry(tree / '.well-known')
+        shutil.copytree(str(preserved), str(tree / '.well-known'), symlinks=True)
+    validate_tree(tree)
+    os.rename(str(active), str(previous))
+    try:
+        os.rename(str(tree), str(active))
+    except BaseException:
+        os.rename(str(previous), str(active))
+        raise
+
+
 def main():
-    if len(sys.argv) not in (2, 4) or (len(sys.argv) == 4 and sys.argv[2] != '--stage'):
-        print('Usage: validate-release.py ARCHIVE [--stage NEW_DIRECTORY]', file=sys.stderr)
+    promote = len(sys.argv) == 4 and sys.argv[1] == '--promote'
+    stage = len(sys.argv) == 4 and sys.argv[2] == '--stage'
+    if len(sys.argv) != 2 and not promote and not stage:
+        print('Usage: validate-release.py ARCHIVE [--stage NEW_DIRECTORY] | --promote STAGE ACTIVE', file=sys.stderr)
         return 2
     try:
-        count = stage_release(sys.argv[1], sys.argv[3]) if len(sys.argv) == 4 else inspect_release(sys.argv[1])
+        if promote:
+            promote_release(sys.argv[2], sys.argv[3])
+            print('Promoted staged release; previous deployment retained')
+        else:
+            count = stage_release(sys.argv[1], sys.argv[3]) if stage else inspect_release(sys.argv[1])
+            print('Validated {} archive members'.format(count))
     except (InvalidRelease, OSError, EOFError, tarfile.TarError):
         # Do not echo attacker-controlled archive names or file contents.
-        print('Release archive validation failed', file=sys.stderr)
+        print('Release operation failed; inspect staging and previous deployment before retrying', file=sys.stderr)
         return 1
-    print('Validated {} archive members'.format(count))
     return 0
 
 

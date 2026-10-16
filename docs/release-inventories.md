@@ -86,3 +86,22 @@ It does not yet promote the tree into the live deployment, preserve the live
 rollback still does not call this helper. Ten Python test methods cover member
 validation and actual staging, including source replacement after inspection,
 external-link rejection, mode/link preservation, and existing destination refusal.
+
+### Promotion helper and recovery limits
+
+`python3 resources/validate-release.py --promote STAGE ACTIVE` requires a private
+staging directory containing `tree` and an existing real deployment directory.
+It copies the live `.well-known` directory into the staged tree, replacing an
+archived copy, then validates all staged filesystem links again. A live
+`.well-known` symlink or copied link escaping the complete staged tree is
+refused. No active files move until these checks complete.
+
+The helper renames ACTIVE to STAGE/previous and then tree to ACTIVE. Failure of
+the second rename attempts to restore the previous tree. Successful promotion
+retains STAGE/previous and the snapshot for recovery. These are two renames,
+not an atomic directory swap: a brief availability gap exists, and a process
+crash or failed recovery rename requires restoring the retained previous tree.
+Do not delete staging after an uncertain result. Cross-filesystem rename is
+unsupported; failures preserve or attempt to restore the previous deployment.
+Trusted parent directories and exclusion of concurrent deployment processes
+remain caller requirements. Production rollback integration is still pending.

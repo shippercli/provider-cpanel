@@ -169,5 +169,90 @@ class ReleaseStagingTest(unittest.TestCase):
             self.assertFalse((root / 'stage').exists())
 
 
+class ReleasePromotionTest(unittest.TestCase):
+    def prepare(self, root):
+        archive = root / 'release.tar.gz'
+        ReleaseStagingTest.make_archive(self, archive)
+        stage = root / 'stage'
+        validator.stage_release(archive, stage)
+        active = root / 'active'
+        active.mkdir()
+        (active / 'old.txt').write_text('old release')
+        return stage, active
+
+    def test_promotes_new_tree_and_retains_previous_with_well_known(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stage, active = self.prepare(Path(directory))
+            (active / '.well-known').mkdir()
+            (active / '.well-known/challenge').write_text('ACME fixture')
+            validator.promote_release(stage, active)
+            self.assertEqual((active / 'link').read_bytes(), b'fixture')
+            self.assertEqual((active / '.well-known/challenge').read_text(), 'ACME fixture')
+            self.assertFalse((active / 'old.txt').exists())
+            self.assertEqual((stage / 'previous/old.txt').read_text(), 'old release')
+            self.assertEqual((stage / 'previous/.well-known/challenge').read_text(), 'ACME fixture')
+
+    def test_failed_second_rename_restores_active_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stage, active = self.prepare(Path(directory))
+            rename = validator.os.rename
+            def fail_promotion(source, target):
+                if Path(source) == stage / 'tree':
+                    raise OSError('synthetic promotion failure')
+                return rename(source, target)
+            with mock.patch.object(validator.os, 'rename', side_effect=fail_promotion):
+                with self.assertRaises(OSError):
+                    validator.promote_release(stage, active)
+            self.assertEqual((active / 'old.txt').read_text(), 'old release')
+            self.assertFalse((stage / 'previous').exists())
+            self.assertTrue((stage / 'tree').is_dir())
+
+    def test_preserved_well_known_cannot_introduce_external_links(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stage, active = self.prepare(root)
+            outside = root / 'outside.txt'
+            outside.write_text('private fixture')
+            (active / '.well-known').mkdir()
+            (active / '.well-known/external').symlink_to(outside)
+            with self.assertRaises(validator.InvalidRelease):
+                validator.promote_release(stage, active)
+            self.assertEqual((active / 'old.txt').read_text(), 'old release')
+            self.assertFalse((stage / 'previous').exists())
+            self.assertEqual(outside.read_text(), 'private fixture')
+
+    def test_live_well_known_symlink_is_refused_without_following_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stage, active = self.prepare(root)
+            outside = root / 'outside'
+            outside.mkdir()
+            (outside / 'sentinel').write_text('private fixture')
+            (active / '.well-known').symlink_to(outside)
+            with self.assertRaises(validator.InvalidRelease):
+                validator.promote_release(stage, active)
+            self.assertEqual((outside / 'sentinel').read_text(), 'private fixture')
+            self.assertEqual((active / 'old.txt').read_text(), 'old release')
+
+    def test_modified_stage_cannot_promote_an_external_link(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stage, active = self.prepare(root)
+            (stage / 'tree/escape').symlink_to('../outside')
+            with self.assertRaises(validator.InvalidRelease):
+                validator.promote_release(stage, active)
+            self.assertEqual((active / 'old.txt').read_text(), 'old release')
+
+    def test_live_deployment_symlink_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stage, active = self.prepare(root)
+            alias = root / 'alias'
+            alias.symlink_to(active)
+            with self.assertRaises(validator.InvalidRelease):
+                validator.promote_release(stage, alias)
+            self.assertEqual((active / 'old.txt').read_text(), 'old release')
+
+
 if __name__ == '__main__':
     unittest.main()
