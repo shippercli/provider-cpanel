@@ -19,3 +19,10 @@ These checks validate inventory metadata and tar readability. They do not
 validate archive member paths, symlinks or application identity; prove safe or
 atomic extraction; or prevent changes between inspection and extraction. Live
 backup and rollback verification remain required.
+
+During rollback safety-backup retention, the selected archive and the newly
+created backup are protected from pruning. Other archives outside the newest
+configured retention window are still pruned. The retained count can temporarily
+exceed the configured limit to preserve those two files; a later normal backup
+uses the usual retention policy. Protection does not prevent concurrent deletion
+or changes by another process.

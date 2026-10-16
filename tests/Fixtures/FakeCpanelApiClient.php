@@ -18,6 +18,9 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
     /** @var array<string, array<int, array{success: bool, message: string, data: mixed, raw: array<string, mixed>}>> */
     public array $responseQueues = [];
 
+    /** @var array<string, \Closure(): array> */
+    public array $responseFactories = [];
+
     /** @var array<int, string> */
     public array $uploadedArchiveEntries = [];
 
@@ -32,6 +35,7 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
         $this->calls[] = compact('module', 'function', 'parameters', 'method') + ['surface' => 'uapi'];
 
         if ($module === 'Fileman' && $function === 'list_files'
+            && ! \array_key_exists('uapi:Fileman:list_files', $this->responseFactories)
             && ! \array_key_exists('uapi:Fileman:list_files', $this->responses)
             && ($this->responseQueues['uapi:Fileman:list_files'] ?? []) === []) {
             return $this->success(['dirs' => [], 'files' => []]);
@@ -107,6 +111,10 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
     /** @return array{success: bool, message: string, data: mixed, raw: array<string, mixed>} */
     private function response(string $key): array
     {
+        if (isset($this->responseFactories[$key])) {
+            return ($this->responseFactories[$key])();
+        }
+
         if (($this->responseQueues[$key] ?? []) !== []) {
             return \array_shift($this->responseQueues[$key]);
         }

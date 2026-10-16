@@ -509,7 +509,7 @@ final class CpanelProvider implements
             $selected = $this->selectRelease($project, $profile, $release);
 
             if ($this->boolCpanelOption($profile, 'backup_before_rollback', false)) {
-                $this->createReleaseBackup($project, $profile, $manifest, true);
+                $this->createReleaseBackup($project, $profile, $manifest, true, [$selected['filename']]);
             }
 
             $deployPath = $manifest['deploy_path'] ?? null;
@@ -1809,6 +1809,7 @@ final class CpanelProvider implements
     }
 
     /**
+     * @param array<int, string> $protectedReleases
      * @return array{id: string, filename: string, path: string, created_at: string}|null
      */
     private function createReleaseBackup(
@@ -1816,6 +1817,7 @@ final class CpanelProvider implements
         object $profile,
         ?array $manifest,
         bool $force = false,
+        array $protectedReleases = [],
     ): ?array {
         if (! $force && ! $this->boolCpanelOption($profile, 'backup_before_deploy', false)) {
             return null;
@@ -1849,6 +1851,7 @@ final class CpanelProvider implements
             $project,
             $profile,
             $this->intCpanelOption($profile, 'release_retention', 5),
+            [...$protectedReleases, $filename],
         );
 
         return [
@@ -1947,10 +1950,14 @@ final class CpanelProvider implements
         throw new RuntimeException("cPanel release archive does not exist: {$release}");
     }
 
-    private function pruneReleases(object $project, object $profile, int $retention): void
+    /** @param array<int, string> $protectedReleases */
+    private function pruneReleases(object $project, object $profile, int $retention, array $protectedReleases = []): void
     {
         $releases = $this->availableReleases($project, $profile);
         foreach (\array_slice($releases, \max(1, $retention)) as $release) {
+            if (\in_array($release['filename'], $protectedReleases, true)) {
+                continue;
+            }
             $this->required($this->api()->api2('Fileman', 'fileop', [
                 'op' => 'unlink',
                 'sourcefiles' => $this->relativeHomePath($release['path']),
