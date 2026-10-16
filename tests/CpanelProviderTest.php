@@ -1106,9 +1106,9 @@ test('rollback restores a selected managed release archive', function (): void {
         '20260727010101-deadbeef',
     ))->toBeTrue();
 
-    $restoreTask = cpanelProviderCalls($client, 'api2', 'Cron', 'add_line')[1];
+    $restoreTask = cpanelProviderCalls($client, 'api2', 'Cron', 'add_line')[0];
     expect($restoreTask['parameters']['command'])
-        ->toContain(' -xzf ')
+        ->toContain('--restore')
         ->toContain('/.shipper/releases/sample/production/'.$release);
 });
 

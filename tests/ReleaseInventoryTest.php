@@ -37,7 +37,7 @@ test('documented release inventory selects an ordinary archive', function (): vo
     $client->responses['api2:Cron:add_line'] = $client->success([['linekey' => '92']]);
     $provider = cpanelProviderWithExistingDomain($client);
     expect($provider->rollback(new CpanelTestProject('.'), new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app']), '20260727010101-deadbeef'))->toBeTrue()
-        ->and(cpanelProviderCalls($client, 'api2', 'Cron', 'add_line'))->toHaveCount(2);
+        ->and(cpanelProviderCalls($client, 'api2', 'Cron', 'add_line'))->toHaveCount(1);
 });
 
 test('status distinguishes unavailable and verified empty release inventories', function (bool $available): void {

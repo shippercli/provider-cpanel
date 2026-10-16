@@ -517,23 +517,51 @@ final class CpanelProvider implements
                 throw new RuntimeException('Refusing cPanel rollback because the manifest deploy path is unsafe');
             }
 
-            $tar = $this->stringCpanelOption($profile, 'tar_path', '/usr/bin/tar');
-            $inspection = \escapeshellarg($tar).' -tzf '.\escapeshellarg($selected['path']).' > /dev/null';
-            $this->runOneTimeCommand("Inspect cPanel release {$selected['id']}", $inspection, $profile);
-
-            $deployDirectory = $this->relativeHomePath($deployPath);
-            $this->cleanManagedDirectory($deployDirectory);
-            $this->ensureRemoteDirectory($deployDirectory);
-
-            $command = \escapeshellarg($tar).' -xzf '.\escapeshellarg($selected['path'])
-                .' -C '.\escapeshellarg($this->absolutePath($deployPath));
-            $this->runOneTimeCommand("Restore cPanel release {$selected['id']}", $command, $profile);
+            $this->restoreStagedRelease($project, $profile, $selected, $deployPath);
 
             return true;
         } catch (Throwable $exception) {
             $this->lastError = $exception->getMessage();
 
             return false;
+        }
+    }
+
+    /** @param array{id: string, filename: string, path: string} $selected */
+    private function restoreStagedRelease(object $project, object $profile, array $selected, string $deployPath): void
+    {
+        $helper = \dirname(__DIR__).'/resources/validate-release.py';
+        $source = \file_get_contents($helper);
+        if (! \is_string($source) || $source === '') {
+            throw new RuntimeException('The cPanel staged restore helper is unavailable');
+        }
+        $python = $this->stringCpanelOption($profile, 'rollback_python_path', '/usr/bin/python3');
+        if ($python === '') {
+            throw new RuntimeException('cPanel rollback_python_path must select a Python 3 executable');
+        }
+        $home = $this->resolveHomeDirectory();
+        $token = \bin2hex(\random_bytes(16));
+        $name = '.shipper-restore-'.$token.'.py';
+        $remote = $home.'/'.$name;
+        $stage = $home.'/.shipper-restore-'.$token.'.stage';
+        $this->required($this->api()->uploadFile($home, $helper, $name, false), 'Upload cPanel staged restore helper');
+        // Execute the same bytes whose digest was checked, without a second read.
+        $bootstrap = 'import hashlib,sys; p=sys.argv.pop(1); expected=sys.argv.pop(1); '
+            .'data=open(p,"rb").read(); '
+            .'hashlib.sha256(data).hexdigest()==expected or sys.exit("Restore helper integrity check failed"); '
+            .'exec(compile(data,p,"exec"),{"__name__":"__main__","__file__":p})';
+        $arguments = [$python, '-c', $bootstrap, $remote, \hash('sha256', $source), '--restore',
+            $selected['path'], $stage, $this->absolutePath($deployPath), $home,
+            $this->projectName($project), $this->profileName($profile), $this->domain($profile)];
+        try {
+            $command = \implode(' ', \array_map('escapeshellarg', $arguments));
+            $this->runOneTimeCommand("Restore cPanel release {$selected['id']}", $command, $profile);
+        } catch (Throwable $error) {
+            throw new RuntimeException('Staged cPanel restore failed; retain and inspect '.$stage.': '.$error->getMessage(), 0, $error);
+        } finally {
+            $this->required($this->api()->api2('Fileman', 'fileop', [
+                'op' => 'unlink', 'sourcefiles' => $name,
+            ]), 'Remove cPanel staged restore helper');
         }
     }
 
