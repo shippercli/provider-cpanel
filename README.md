@@ -73,3 +73,9 @@ are omitted. Unavailable or malformed Git status responses use fixed diagnostics
 This changes the status JSON shape; consumers needing command output should use
 an explicit log or API operation. Other status sections retain their existing
 behavior. This does not establish live cPanel deployment verification.
+
+Runtime data in both `shipper plan` and `shipper status` is also summarized:
+only type, version, application root, base URI and the dependency-install flag
+are included. PHP INI directives can contain credentials or command arguments
+and are omitted from these outputs. The full configured directives continue to
+be used when applying runtime configuration.

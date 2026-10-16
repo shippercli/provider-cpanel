@@ -1120,7 +1120,7 @@ test('status reports manifest deployment resource usage and releases', function 
             'profile' => 'production',
             'deploy_path' => '/app',
             'applied_at' => '2026-07-27T01:02:03+00:00',
-            'runtime' => ['type' => 'php'],
+            'runtime' => ['type' => 'php', 'php_ini' => ['sendmail_path' => 'private-status-token']],
             'deployment' => [
                 'method' => 'git',
                 'repository_root' => '/home/shipper/app',
@@ -1306,4 +1306,16 @@ test('git status without a saved task still filters raw output', function (): vo
         'available' => true,
         'data' => [['task_id' => 12, 'state' => 'succeeded', 'timestamps' => ['succeeded' => 123]]],
     ]);
+});
+
+
+test('plan summarizes runtime without exposing php ini configuration', function (): void {
+    $provider = cpanelProviderWithExistingDomain(new FakeCpanelApiClient);
+    $plan = $provider->plan(new CpanelTestProject('.'), new CpanelTestProfile([
+        'domain' => 'app.example.com',
+        'deploy_path' => '/app',
+        'runtime' => ['type' => 'php', 'version' => '8.4', 'php_ini' => ['sendmail_path' => 'private-plan-token']],
+    ]));
+    expect(json_encode($plan, JSON_THROW_ON_ERROR))->not->toContain('private-plan-token');
+    expect($plan['runtime']['version'])->toBe('8.4');
 });

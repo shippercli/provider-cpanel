@@ -247,7 +247,7 @@ final class CpanelProvider implements
             'domain_type' => $this->domainType($profile),
             'deploy_path' => $this->deployPath($profile),
             'deployment_method' => $method,
-            'runtime' => $runtime,
+            'runtime' => $this->runtimeStatusSummary($runtime),
             'database_count' => \count($this->databaseConfigs($project, $profile)),
             'cron_count' => \count($cron),
             'dns_record_count' => \count($accountResources['dns_records']),
@@ -456,7 +456,7 @@ final class CpanelProvider implements
             'deploy_path' => $this->deployPath($profile),
             'manifest_matches' => $manifestMatches,
             'applied_at' => $manifestMatches ? ($manifest['applied_at'] ?? null) : null,
-            'runtime' => $manifestMatches ? ($manifest['runtime'] ?? null) : null,
+            'runtime' => $manifestMatches ? $this->runtimeStatusSummary($manifest['runtime'] ?? null) : null,
             'deployment' => $manifestMatches ? $this->deploymentStatusSummary($manifest['deployment'] ?? null) : null,
             'previous_release' => $manifestMatches ? ($manifest['previous_release'] ?? null) : null,
             'deployment_status' => $deploymentStatus,
@@ -1275,6 +1275,26 @@ final class CpanelProvider implements
                 \usleep($interval * 1000);
             }
         } while (true);
+    }
+
+    /** @return array<string, string|bool>|null */
+    private function runtimeStatusSummary(mixed $runtime): ?array
+    {
+        if (! \is_array($runtime)) {
+            return null;
+        }
+
+        $summary = [];
+        foreach (['type', 'version', 'application_root', 'base_uri'] as $key) {
+            if (\is_string($runtime[$key] ?? null)) {
+                $summary[$key] = $runtime[$key];
+            }
+        }
+        if (\is_bool($runtime['install_dependencies'] ?? null)) {
+            $summary['install_dependencies'] = $runtime['install_dependencies'];
+        }
+
+        return $summary;
     }
 
     /** @return array<string, mixed>|null */
