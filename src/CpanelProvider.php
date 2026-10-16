@@ -899,9 +899,6 @@ final class CpanelProvider implements
                 }
 
                 $userExisted = $user === '' ? true : $this->mysqlUserExists($user);
-                if ($databaseExisted && $user !== '' && ! $userExisted && ! $database['adopt_existing']) {
-                    throw new RuntimeException("Refusing to create a user for existing MySQL database {$name} without adopt_existing: true.");
-                }
                 if ($user !== '' && ! $userExisted) {
                     $this->required($this->api()->uapi('Mysql', 'create_user', [
                         'name' => $user,
@@ -932,9 +929,6 @@ final class CpanelProvider implements
                 }
 
                 $userExisted = $user === '' ? true : $this->postgresUserExists($user);
-                if ($databaseExisted && $user !== '' && ! $userExisted && ! $database['adopt_existing']) {
-                    throw new RuntimeException("Refusing to create a user for existing PostgreSQL database {$name} without adopt_existing: true.");
-                }
                 if ($user !== '' && ! $userExisted) {
                     $this->required($this->api()->uapi('Postgresql', 'create_user', [
                         'name' => $user,

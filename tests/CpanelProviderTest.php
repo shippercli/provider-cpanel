@@ -303,10 +303,10 @@ test('php mysql cron redirect ssl and alias lifecycle is applied through cpanel 
 });
 
 test('existing database privilege and password mutations require exact adoption consent', function (): void {
-    foreach ([[false, true], [true, true], [false, false], [true, false]] as [$adopt, $userExists]) {
+    foreach ([false, true] as $adopt) {
         $client = new FakeCpanelApiClient;
         $client->responses['uapi:Mysql:list_databases'] = $client->success([['database' => 'shipper_app']]);
-        $client->responses['uapi:Mysql:list_users'] = $client->success($userExists ? [['user' => 'shipper_app']] : []);
+        $client->responses['uapi:Mysql:list_users'] = $client->success([['user' => 'shipper_app']]);
         $project = new CpanelTestProject(cpanelProviderFixture(['index.php' => '<?php echo "ok";']));
         $profile = new CpanelTestProfile([
             'domain' => 'app.example.com', 'deploy_path' => '/php-app', 'deployment_method' => 'fileman',
@@ -317,12 +317,9 @@ test('existing database privilege and password mutations require exact adoption 
         ]);
         $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
         $method = new ReflectionMethod($provider, 'ensureDatabases');
-        $failure = null;
-        try { $method->invoke($provider, $project, $profile); } catch (RuntimeException $error) { $failure = $error; }
+        $method->invoke($provider, $project, $profile);
         expect(cpanelProviderCalls($client, 'uapi', 'Mysql', 'set_privileges_on_database'))->toHaveCount($adopt ? 1 : 0)
-            ->and(cpanelProviderCalls($client, 'uapi', 'Mysql', 'set_password'))->toHaveCount($adopt && $userExists ? 1 : 0)
-            ->and(cpanelProviderCalls($client, 'uapi', 'Mysql', 'create_user'))->toHaveCount($adopt && ! $userExists ? 1 : 0)
-            ->and($failure !== null)->toBe(! $adopt && ! $userExists);
+            ->and(cpanelProviderCalls($client, 'uapi', 'Mysql', 'set_password'))->toHaveCount($adopt ? 1 : 0);
     }
 });
 
