@@ -100,3 +100,12 @@ test('failed upload JSON strips remote reasons and partial results', function (a
     [['uploads' => [['status' => '1junk', 'reason' => 'synthetic-secret']]]],
     [['uploads' => [['status' => 1, 'error' => 'synthetic-secret']]]],
 ]);
+
+test('non-object JSON roots return safe failures instead of escaping decode exceptions', function (string $body): void {
+    $history = [];
+    $client = cpanelTestClient([new Response(200, [], $body)], $history);
+    $api = new CpanelApiClient(['host' => 'cpanel.example.com', 'username' => 'fixture', 'api_token' => 'synthetic-token'], $client);
+    expect($api->uapi('Fixture', 'read'))->toBe([
+        'success' => false, 'message' => 'cPanel API returned invalid JSON', 'data' => null, 'raw' => [],
+    ]);
+})->with(['null', '42', '"synthetic-secret"', '[]']);

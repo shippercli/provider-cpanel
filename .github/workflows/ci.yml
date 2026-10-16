@@ -40,5 +40,8 @@ jobs:
       - name: Run tests
         run: composer test
 
+      - name: Verify real HTTP API JSON failures
+        run: python3 tests/http/test_json_failures.py
+
       - name: Audit dependencies
         run: composer audit --locked --no-interaction

@@ -364,8 +364,8 @@ final class CpanelApiClient implements CpanelApiClientInterface
     private function decode(string $body): array
     {
         $decoded = \json_decode($body, true, 512, JSON_THROW_ON_ERROR);
-        if (! \is_array($decoded)) {
-            throw new RuntimeException('cPanel returned a non-object JSON response');
+        if (! \is_array($decoded) || ! \str_starts_with(\ltrim($body), '{')) {
+            throw new JsonException('cPanel API returned invalid JSON');
         }
 
         return $decoded;
