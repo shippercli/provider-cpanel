@@ -47,3 +47,6 @@ project and profile. It removes only resources recorded as Shipper-created:
 - the safe managed deployment path
 
 Account roots, `/`, and `/public_html` are protected from recursive deletion.
+
+Mail and FTP account flags require explicit YAML booleans. See the
+[account option guide](account-options.md) for defaults and validation rules.

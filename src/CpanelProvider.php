@@ -82,6 +82,23 @@ final class CpanelProvider implements
         return $this->apiClient ??= new CpanelApiClient($this->config);
     }
 
+    private function assertAccountResourceOptions(object $profile): void
+    {
+        $options = $this->cpanelOptions($profile);
+        foreach ([
+            'email_accounts' => ['create', 'manage_existing', 'update_password', 'delete_data', 'send_welcome_email'],
+            'ftp_accounts' => ['create', 'manage_existing', 'update_password', 'delete_home'],
+        ] as $resource => $flags) {
+            foreach ($this->resourceConfigEntries($options[$resource] ?? []) as $entry) {
+                foreach ($flags as $flag) {
+                    if (\array_key_exists($flag, $entry) && ! \is_bool($entry[$flag])) {
+                        throw new RuntimeException("cPanel {$resource}.{$flag} must be a boolean");
+                    }
+                }
+            }
+        }
+    }
+
     public function validate(object $project, object $profile): array
     {
         $errors = [];
@@ -172,9 +189,9 @@ final class CpanelProvider implements
     public function plan(object $project, object $profile): array
     {
         $domain = $this->domain($profile);
+        $this->assertAccountResourceOptions($profile);
         $method = $this->deploymentMethod($project, $profile);
         $runtime = $this->runtimeConfig($project, $profile);
-        $this->assertAccountResourceOptions($profile);
         $accountResources = $this->accountResourceConfigs($project, $profile);
         $actions = [
             'Discover enabled cPanel account features',
@@ -272,6 +289,13 @@ final class CpanelProvider implements
 
         try {
             $this->assertAccountResourceOptions($profile);
+        } catch (RuntimeException $exception) {
+            $this->lastError = $exception->getMessage();
+
+            return false;
+        }
+
+        try {
             $context = $this->context($project, $profile);
             $previousManifest = $this->readManifest($profile);
             if ($previousManifest !== null && ! $this->manifestMatches($previousManifest, $project, $profile)) {
@@ -2562,23 +2586,6 @@ final class CpanelProvider implements
         }
 
         return $result;
-    }
-
-    private function assertAccountResourceOptions(object $profile): void
-    {
-        $options = $this->cpanelOptions($profile);
-        foreach ([
-            'email_accounts' => ['create', 'manage_existing', 'update_password', 'delete_data', 'send_welcome_email'],
-            'ftp_accounts' => ['create', 'manage_existing', 'update_password', 'delete_home'],
-        ] as $resource => $flags) {
-            foreach ($this->resourceConfigEntries($options[$resource] ?? []) as $entry) {
-                foreach ($flags as $flag) {
-                    if (\array_key_exists($flag, $entry) && ! \is_bool($entry[$flag])) {
-                        throw new RuntimeException("cPanel {$resource}.{$flag} must be a boolean");
-                    }
-                }
-            }
-        }
     }
 
     /**
