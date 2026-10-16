@@ -553,15 +553,24 @@ final class CpanelProvider implements
         $arguments = [$python, '-c', $bootstrap, $remote, \hash('sha256', $source), '--restore',
             $selected['path'], $stage, $this->absolutePath($deployPath), $home,
             $this->projectName($project), $this->profileName($profile), $this->domain($profile)];
+        $failure = null;
         try {
             $command = \implode(' ', \array_map('escapeshellarg', $arguments));
             $this->runOneTimeCommand("Restore cPanel release {$selected['id']}", $command, $profile);
         } catch (Throwable $error) {
-            throw new RuntimeException('Staged cPanel restore failed; retain and inspect '.$stage.': '.$error->getMessage(), 0, $error);
-        } finally {
+            $failure = $error;
+        }
+        try {
             $this->required($this->api()->api2('Fileman', 'fileop', [
                 'op' => 'unlink', 'sourcefiles' => $name,
             ]), 'Remove cPanel staged restore helper');
+        } catch (Throwable $error) {
+            $failure = $failure === null ? $error : new RuntimeException(
+                $failure->getMessage().'; helper cleanup also failed: '.$error->getMessage(), 0, $failure,
+            );
+        }
+        if ($failure !== null) {
+            throw new RuntimeException('Staged cPanel restore failed; retain and inspect '.$stage.': '.$failure->getMessage(), 0, $failure);
         }
     }
 
