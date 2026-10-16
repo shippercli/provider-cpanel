@@ -868,11 +868,46 @@ final class CpanelProvider implements
         }
     }
 
+    /** @return array<string, array{bool, bool}> */
+    private function preflightDatabases(object $project, object $profile): array
+    {
+        $databases = $this->databaseConfigs($project, $profile);
+        $states = [];
+        $databaseNames = [];
+        $userPasswords = [];
+        foreach ($databases as $database) {
+            $type = $database['type'];
+            $name = $this->qualifiedDatabaseName($database['name']);
+            $user = $database['user'] === '' ? '' : $this->qualifiedDatabaseName($database['user']);
+            $databaseKey = $type.':'.$name;
+            $userKey = $type.':'.$user;
+            if (isset($databaseNames[$databaseKey])) {
+                throw new RuntimeException('Duplicate cPanel database identity');
+            }
+            $databaseNames[$databaseKey] = true;
+            if ($user !== '') {
+                if (isset($userPasswords[$userKey]) && $userPasswords[$userKey] !== $database['password']) {
+                    throw new RuntimeException('Conflicting passwords for a shared cPanel database user');
+                }
+                $userPasswords[$userKey] = $database['password'];
+            }
+            $states[$databaseKey] = match ($type) {
+                'mysql' => [$this->mysqlDatabaseExists($name), $user === '' || $this->mysqlUserExists($user)],
+                'postgresql' => [$this->postgresDatabaseExists($name), $user === '' || $this->postgresUserExists($user)],
+                default => throw new RuntimeException("Unsupported cPanel database type: {$type}"),
+            };
+        }
+
+        return $states;
+    }
+
     /**
      * @return array{resources: array<int, array<string, mixed>>, environment: array<string, string>}
      */
     private function ensureDatabases(object $project, object $profile): array
     {
+        $states = $this->preflightDatabases($project, $profile);
+        $createdUsers = [];
         $resources = [];
         $environment = [];
 
@@ -881,9 +916,11 @@ final class CpanelProvider implements
             $name = $this->qualifiedDatabaseName($database['name']);
             $user = $database['user'] === '' ? '' : $this->qualifiedDatabaseName($database['user']);
             $password = $database['password'];
+            [$databaseExisted, $userExisted] = $states[$type.':'.$name];
+            $userKey = $type.':'.$user;
+            $userExisted = $userExisted || isset($createdUsers[$userKey]);
 
             if ($type === 'mysql') {
-                $databaseExisted = $this->mysqlDatabaseExists($name);
                 if (! $databaseExisted) {
                     $this->required(
                         $this->api()->uapi('Mysql', 'create_database', ['name' => $name]),
@@ -891,7 +928,6 @@ final class CpanelProvider implements
                     );
                 }
 
-                $userExisted = $user === '' ? true : $this->mysqlUserExists($user);
                 if ($user !== '' && ! $userExisted) {
                     $this->required($this->api()->uapi('Mysql', 'create_user', [
                         'name' => $user,
@@ -912,7 +948,6 @@ final class CpanelProvider implements
                     ]), "Set MySQL privileges for {$user}");
                 }
             } elseif ($type === 'postgresql') {
-                $databaseExisted = $this->postgresDatabaseExists($name);
                 if (! $databaseExisted) {
                     $this->required(
                         $this->api()->uapi('Postgresql', 'create_database', ['name' => $name]),
@@ -920,7 +955,6 @@ final class CpanelProvider implements
                     );
                 }
 
-                $userExisted = $user === '' ? true : $this->postgresUserExists($user);
                 if ($user !== '' && ! $userExisted) {
                     $this->required($this->api()->uapi('Postgresql', 'create_user', [
                         'name' => $user,
@@ -936,6 +970,10 @@ final class CpanelProvider implements
                 }
             } else {
                 throw new RuntimeException("Unsupported cPanel database type: {$type}");
+            }
+
+            if ($user !== '' && ! $userExisted) {
+                $createdUsers[$userKey] = true;
             }
 
             $resources[] = [
@@ -2958,36 +2996,56 @@ final class CpanelProvider implements
         return null;
     }
 
+    private function databaseInventoryContains(mixed $data, string $field, string $name, string $label, bool $stringEntries = false): bool
+    {
+        if (! \is_array($data) || ! \array_is_list($data)) {
+            throw new RuntimeException("Unreadable {$label} inventory");
+        }
+
+        $names = [];
+        foreach ($data as $row) {
+            if ($stringEntries && \is_string($row)) {
+                $identity = $row;
+            } elseif (\is_array($row)) {
+                $identity = $row[$field] ?? $row['name'] ?? null;
+            } else {
+                throw new RuntimeException("Unreadable {$label} inventory");
+            }
+            if (! \is_string($identity) || $identity === '' || \in_array($identity, $names, true)) {
+                throw new RuntimeException("Unreadable or ambiguous {$label} inventory");
+            }
+            $names[] = $identity;
+        }
+
+        return \in_array($name, $names, true);
+    }
+
     private function mysqlDatabaseExists(string $name): bool
     {
         $data = $this->required($this->api()->uapi('Mysql', 'list_databases'), 'List MySQL databases');
 
-        return $this->containsValueAtKey($data, 'database', $name)
-            || $this->containsValueAtKey($data, 'name', $name);
+        return $this->databaseInventoryContains($data, 'database', $name, 'MySQL database');
     }
 
     private function mysqlUserExists(string $name): bool
     {
         $data = $this->required($this->api()->uapi('Mysql', 'list_users'), 'List MySQL users');
 
-        return $this->containsValueAtKey($data, 'user', $name)
-            || $this->containsValueAtKey($data, 'name', $name);
+        return $this->databaseInventoryContains($data, 'user', $name, 'MySQL user');
     }
 
     private function postgresDatabaseExists(string $name): bool
     {
         $data = $this->required($this->api()->uapi('Postgresql', 'list_databases'), 'List PostgreSQL databases');
 
-        return $this->containsValueAtKey($data, 'database', $name)
-            || $this->containsValueAtKey($data, 'name', $name);
+        return $this->databaseInventoryContains($data, 'database', $name, 'PostgreSQL database');
     }
 
     private function postgresUserExists(string $name): bool
     {
         $data = $this->required($this->api()->uapi('Postgresql', 'list_users'), 'List PostgreSQL users');
 
-        return $this->containsValueAtKey($data, 'user', $name)
-            || $this->containsValueAtKey($data, 'name', $name);
+        return $this->databaseInventoryContains($data, 'user', $name, 'PostgreSQL user', true);
     }
 
     /**

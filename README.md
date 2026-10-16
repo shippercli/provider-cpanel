@@ -2,6 +2,18 @@
 
 Deploy and operate applications on cPanel accounts from Shipper CLI.
 
+## Database inventory safety
+
+Database and user inventories must be readable lists with unambiguous nonempty
+identities. Missing, malformed, or duplicate inventory data fails apply instead
+of being treated as an empty account. All configured database and user inventories are read before database creation,
+password rotation, or privilege changes. Duplicate database identities and
+conflicting configured passwords for a shared user are rejected. A shared user
+with matching passwords is created once.
+PostgreSQL usernames use the documented array of strings; object rows remain
+accepted for compatibility. This preflight covers database resources; it is not a transaction or a
+preflight of every deployment resource. Live account verification is required.
+
 ## Install
 
 ```bash

@@ -930,6 +930,7 @@ test('repeated apply preserves ownership needed for safe destroy', function (): 
     ];
     $client->responseQueues['uapi:Mysql:list_databases'] = [
         $client->success([]),
+        $client->success([]),
         $client->success([['database' => 'shipper_app']]),
     ];
     $client->responseQueues['uapi:Mysql:list_users'] = [
