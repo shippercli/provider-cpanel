@@ -56,7 +56,7 @@ test('documented postgresql username strings preserve an existing user', functio
 test('later database inventory failure stops all database mutations', function (): void {
     $client = new FakeCpanelApiClient;
     $client->responses['uapi:Postgresql:list_databases'] = $client->success(null);
-    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman', 'database_environment_prefixes' => ['first' => 'DB', 'second' => 'SECOND_DB']]);
     $profile = new CpanelTestProfile([
         'domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'],
         'databases' => [
@@ -66,13 +66,14 @@ test('later database inventory failure stops all database mutations', function (
         'cpanel' => ['archive_extraction' => 'direct'],
     ]);
     expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+        ->and($provider->getLastError())->toContain('inventory')
         ->and(cpanelProviderCalls($client, 'uapi', 'Mysql', 'create_database'))->toBeEmpty()
         ->and(cpanelProviderCalls($client, 'uapi', 'Mysql', 'create_user'))->toBeEmpty();
 });
 
 test('database preflight rejects duplicate identities and conflicting shared passwords', function (string $collision): void {
     $client = new FakeCpanelApiClient;
-    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman', 'database_environment_prefixes' => ['first' => 'DB', 'second' => 'SECOND_DB']]);
     $profile = new CpanelTestProfile([
         'domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'],
         'databases' => [
@@ -89,7 +90,7 @@ test('database preflight rejects duplicate identities and conflicting shared pas
 
 test('shared database users with the same password are created only once', function (string $type, string $module): void {
     $client = new FakeCpanelApiClient;
-    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman', 'database_environment_prefixes' => ['first' => 'DB', 'second' => 'SECOND_DB']]);
     $profile = new CpanelTestProfile([
         'domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'],
         'databases' => [
