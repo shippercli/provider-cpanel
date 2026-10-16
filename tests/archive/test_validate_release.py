@@ -3,6 +3,8 @@ import io
 import json
 import fcntl
 import hashlib
+import subprocess
+import sys
 from pathlib import Path
 import tarfile
 import tempfile
@@ -329,6 +331,93 @@ class RestoreEntryPointTest(unittest.TestCase):
                 self.restore(home, active, archive, stage)
             self.assertEqual((active / 'old.txt').read_text(), 'old release')
             self.assertFalse(stage.exists())
+
+
+class RestoreRecoveryTest(unittest.TestCase):
+    def prepare(self, root):
+        return RestoreEntryPointTest.prepare(self, root)
+
+    def restore(self, home, active, archive, stage):
+        return RestoreEntryPointTest.restore(self, home, active, archive, stage)
+
+    def test_process_exit_between_renames_recovers_old_release_idempotently(self):
+        for crash_after_first in (True, False):
+            with self.subTest(crash_after_first=crash_after_first), tempfile.TemporaryDirectory() as directory:
+                home, active, archive, stage = self.prepare(Path(directory).resolve())
+                program = """import importlib.util, os, sys
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location('validator', sys.argv[1])
+v = importlib.util.module_from_spec(spec); spec.loader.exec_module(v)
+rename = v.os.rename
+active = sys.argv[4]
+def crash(source, target):
+    if sys.argv[6] == 'first' and source == active:
+        rename(source, target)
+        os._exit(77)
+    if sys.argv[6] == 'second' and source.endswith('/tree'):
+        os._exit(77)
+    return rename(source, target)
+v.os.rename = crash
+v.restore_release(sys.argv[2], sys.argv[3], active, sys.argv[5], 'sample', 'production', 'app.example.com')
+"""
+                result = subprocess.run([sys.executable, '-c', program, str(Path(validator.__file__).resolve()),
+                                         str(archive), str(stage), str(active), str(home),
+                                         'first' if crash_after_first else 'second'], capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 77, result.stderr)
+                self.assertFalse(active.exists())
+                self.assertEqual(validator.recover_release(stage), 'recovered')
+                self.assertEqual((active / 'old.txt').read_text(), 'old release')
+                self.assertEqual(validator.recover_release(stage), 'recovered')
+                with self.assertRaises(validator.InvalidRelease):
+                    validator.cleanup_release(stage)
+
+    def test_cleanup_confirmed_promotion_preserves_active_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, active, archive, stage = self.prepare(Path(directory).resolve())
+            self.restore(home, active, archive, stage)
+            self.assertEqual(validator.recover_release(stage), 'promoted')
+            validator.cleanup_release(stage)
+            self.assertFalse(stage.exists())
+            self.assertEqual((active / 'index.txt').read_text(), 'new release')
+            self.assertTrue(archive.exists())
+
+    def test_changed_active_directory_blocks_recovery_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, active, archive, stage = self.prepare(Path(directory).resolve())
+            self.restore(home, active, archive, stage)
+            active.rename(home / 'moved')
+            active.mkdir()
+            (active / 'sentinel').write_text('unrelated replacement')
+            for operation in (validator.recover_release, validator.cleanup_release):
+                with self.assertRaises(validator.InvalidRelease):
+                    operation(stage)
+            self.assertEqual((active / 'sentinel').read_text(), 'unrelated replacement')
+            self.assertTrue((stage / 'previous/old.txt').exists())
+
+    def test_interrupted_cleanup_can_resume(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, active, archive, stage = self.prepare(Path(directory).resolve())
+            self.restore(home, active, archive, stage)
+            with mock.patch.object(validator, 'remove_staged_entry', side_effect=OSError('synthetic cleanup failure')):
+                with self.assertRaises(OSError):
+                    validator.cleanup_release(stage)
+            with self.assertRaises(validator.InvalidRelease):
+                validator.recover_release(stage)
+            validator.cleanup_release(stage)
+            self.assertFalse(stage.exists())
+            self.assertEqual((active / 'index.txt').read_text(), 'new release')
+
+    def test_replaced_previous_symlink_cannot_authorize_deletion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            home, active, archive, stage = self.prepare(root)
+            self.restore(home, active, archive, stage)
+            (stage / 'previous').rename(root / 'outside')
+            (stage / 'previous').symlink_to(root / 'outside')
+            with self.assertRaises(validator.InvalidRelease):
+                validator.cleanup_release(stage)
+            self.assertEqual((root / 'outside/old.txt').read_text(), 'old release')
+            self.assertEqual((active / 'index.txt').read_text(), 'new release')
 
 
 if __name__ == '__main__':

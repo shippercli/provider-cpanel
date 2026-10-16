@@ -41,8 +41,9 @@ The provider no longer clears the deployment and extracts an unchecked tar into 
 ## Recovery and remaining limits
 
 Successful restore retains the previous deployment and archive snapshot in the
-reported account-home staging directory. Automatic staging cleanup is not yet
-implemented; do not delete it after an uncertain result. The two renames are not
+account-home `.shipper-restore-<token>.stage` directory. Failure diagnostics
+include that path; successful stages can be identified by their journal. Automatic
+staging cleanup is not enabled; do not delete it after an uncertain result. The two renames are not
 an atomic swap: a brief availability gap exists, and a process crash or failed
 recovery rename can require manual restoration from STAGE/previous. Cross-device
 promotion is unsupported. The directory is private, but another process running
@@ -74,3 +75,35 @@ Run `python3 tests/archive/test_validate_release.py` for member validation,
 staging, identity, locking, promotion, and injected failure tests. The PHP suite
 also executes the actual generated command against local valid, corrupt,
 missing, foreign, external-link and tampered-helper fixtures, plus missing Python.
+
+### Journal-based recovery and explicit cleanup
+
+Promotion writes a private `restore-state.json` journal with account/staging/active
+paths and device/inode identities for the stage, previous tree and promoted tree.
+Journal replacement is atomic and its file and staging directory are fsynced.
+This records prepared, displaced, promoted, recovered and cleaning states.
+
+Run the packaged helper with `--recover STAGE` after an interrupted restore. It
+validates the private journal and ancestry, acquires the same restore lock, and
+checks actual directory identities. If the active path is absent and the expected
+previous tree remains, it restores that tree. If the expected old or new tree is
+already active, recovery reports recovered or promoted without overwriting it.
+A different active tree or changed previous tree requires review and is refused.
+Repeat recovery is safe for these recognized states. Cleanup-in-progress must
+be resumed with cleanup rather than recovery.
+
+After confirming a successful restoration, `--cleanup STAGE` removes only the
+recorded previous tree, archive snapshot and journal. It requires the promoted
+active directory identity, expected previous-directory identity, and no unexpected
+staging entries. It never deletes the original release archive or active tree.
+Interrupted cleanup records its phase and can be retried; a stage left empty by
+interruption after journal deletion may require removing the empty directory.
+Recovery/cleanup of pre-journal stages remains manual. Keep the helper package
+available; the provider removes its temporary uploaded script after the task.
+
+Tests terminate a real child process immediately after the first rename and
+immediately before the second, then recover the original tree twice. They also
+exercise confirmed cleanup, interrupted cleanup retry, changed-active refusal and
+previous-tree symlink refusal. These are process-interruption checks, not proof
+of power-loss durability or live cPanel behavior. Shared apply/destroy locking
+and automatic cleanup policy remain unfinished.

@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import tempfile
 import sys
 import tarfile
 
@@ -224,7 +225,7 @@ def remove_staged_entry(path):
         shutil.rmtree(str(path))
 
 
-def promote_release(destination, active):
+def promote_release(destination, active, home=None):
     """Promote a prepared tree, retaining the old tree for recovery.
 
     Parents must be trusted. This uses two renames, not a single atomic swap.
@@ -248,12 +249,27 @@ def promote_release(destination, active):
         remove_staged_entry(tree / '.well-known')
         shutil.copytree(str(preserved), str(tree / '.well-known'), symlinks=True)
     validate_tree(tree)
+    journal = {
+        'version': 1, 'phase': 'prepared', 'stage': str(stage_real),
+        'home': str(Path(home).resolve() if home is not None else stage_real.parent),
+        'active': str(active_real), 'stage_id': directory_id(destination),
+        'previous_id': directory_id(active), 'new_id': directory_id(tree),
+    }
+    if (destination / 'restore-state.json').exists() or (destination / 'restore-state.json').is_symlink():
+        raise InvalidRelease('restore journal already exists')
+    save_journal(destination, journal)
     os.rename(str(active), str(previous))
     try:
+        journal['phase'] = 'displaced'
+        save_journal(destination, journal)
         os.rename(str(tree), str(active))
     except BaseException:
         os.rename(str(previous), str(active))
+        journal['phase'] = 'recovered'
+        save_journal(destination, journal)
         raise
+    journal['phase'] = 'promoted'
+    save_journal(destination, journal)
 
 
 def trusted_path(value, directory=True):
@@ -322,18 +338,150 @@ def restore_release(archive, destination, active, home, project, profile, domain
         verify_identity(active, home, active, project, profile, domain)
         stage_release(archive, destination)
         verify_identity(destination / 'tree', home, active, project, profile, domain)
-        promote_release(destination, active)
+        promote_release(destination, active, home)
+
+
+def directory_id(path):
+    info = Path(path).lstat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise InvalidRelease('recovery path must be a real directory')
+    return [info.st_dev, info.st_ino]
+
+
+def save_journal(stage, journal):
+    with tempfile.NamedTemporaryFile(mode='w', dir=str(stage), prefix='.journal-', delete=False) as output:
+        temporary = output.name
+        try:
+            json.dump(journal, output)
+            output.flush()
+            os.fsync(output.fileno())
+        except BaseException:
+            os.unlink(temporary)
+            raise
+    os.replace(temporary, str(stage / 'restore-state.json'))
+    descriptor = os.open(str(stage), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def load_journal(destination):
+    stage = trusted_path(destination)
+    if stage.stat().st_mode & 0o077:
+        raise InvalidRelease('recovery stage must be private')
+    state = stage / 'restore-state.json'
+    if state.is_symlink() or not state.is_file() or state.stat().st_size > 16384:
+        raise InvalidRelease('invalid restore journal')
+    with open(str(state), 'r', encoding='utf-8') as stream:
+        journal = json.load(stream)
+    if not isinstance(journal, dict) or type(journal.get('version')) is not int or journal.get('version') != 1:
+        raise InvalidRelease('unsupported restore journal')
+    for key in ('stage_id', 'previous_id', 'new_id'):
+        value = journal.get(key)
+        if not isinstance(value, list) or len(value) != 2 or any(type(item) is not int or item < 0 for item in value):
+            raise InvalidRelease('invalid restore journal identity')
+    if journal.get('phase') not in ('prepared', 'displaced', 'promoted', 'recovered', 'cleaning'):
+        raise InvalidRelease('invalid restore journal phase')
+    for key in ('stage', 'home', 'active'):
+        if not isinstance(journal.get(key), str):
+            raise InvalidRelease('invalid restore journal path')
+    home = trusted_path(journal['home'])
+    active = Path(journal['active'])
+    trusted_path(active.parent)
+    if (journal['stage'] != str(stage) or directory_id(stage) != journal['stage_id']
+            or home == Path('/') or home not in active.parents
+            or active == home / 'public_html' or home not in stage.parents
+            or stage == active or stage in active.parents or active in stage.parents):
+        raise InvalidRelease('restore journal scope mismatch')
+    return stage, home, active, journal
+
+
+def journal_lock(home, active):
+    name = '.shipper-rollback-' + hashlib.sha256(str(active).encode()).hexdigest() + '.lock'
+    descriptor = os.open(str(home / name), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise InvalidRelease('restore lock is not an ordinary file')
+    lock = os.fdopen(descriptor, 'r+')
+    try:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BaseException:
+        lock.close()
+        raise
+    return lock
+
+
+def recover_release(destination):
+    stage, home, active, journal = load_journal(destination)
+    with journal_lock(home, active):
+        # Re-read after locking; a different helper may have completed recovery.
+        stage, home, active, journal = load_journal(destination)
+        if journal['phase'] == 'cleaning':
+            raise InvalidRelease('cleanup already started; resume cleanup instead')
+        if active.exists() or active.is_symlink():
+            identity = directory_id(active)
+            if identity == journal['new_id']:
+                journal['phase'] = 'promoted'
+            elif identity == journal['previous_id']:
+                journal['phase'] = 'recovered'
+            else:
+                raise InvalidRelease('active deployment changed since restore')
+        else:
+            previous = stage / 'previous'
+            if directory_id(previous) != journal['previous_id']:
+                raise InvalidRelease('previous deployment identity changed')
+            os.rename(str(previous), str(active))
+            journal['phase'] = 'recovered'
+        save_journal(stage, journal)
+        return journal['phase']
+
+
+def cleanup_release(destination):
+    stage, home, active, journal = load_journal(destination)
+    with journal_lock(home, active):
+        stage, home, active, journal = load_journal(destination)
+        if journal['phase'] not in ('promoted', 'cleaning') or directory_id(active) != journal['new_id']:
+            raise InvalidRelease('cleanup requires a confirmed promoted deployment')
+        previous = stage / 'previous'
+        if previous.exists() or previous.is_symlink():
+            if directory_id(previous) != journal['previous_id']:
+                raise InvalidRelease('previous deployment identity changed')
+        elif journal['phase'] != 'cleaning':
+            raise InvalidRelease('previous deployment is missing')
+        expected = {'previous', 'archive.tar.gz', 'restore-state.json'}
+        present = set(path.name for path in stage.iterdir())
+        if not present <= expected or (journal['phase'] == 'promoted' and present != expected):
+            raise InvalidRelease('unexpected staging entries require review')
+        snapshot = stage / 'archive.tar.gz'
+        if snapshot.exists() or snapshot.is_symlink():
+            trusted_path(snapshot, directory=False)
+        journal['phase'] = 'cleaning'
+        save_journal(stage, journal)
+        if previous.exists():
+            remove_staged_entry(previous)
+        if snapshot.exists():
+            snapshot.unlink()
+        (stage / 'restore-state.json').unlink()
+        stage.rmdir()
 
 
 def main():
+    recover = len(sys.argv) == 3 and sys.argv[1] == '--recover'
+    cleanup = len(sys.argv) == 3 and sys.argv[1] == '--cleanup'
     restore = len(sys.argv) == 9 and sys.argv[1] == '--restore'
     promote = len(sys.argv) == 4 and sys.argv[1] == '--promote'
     stage = len(sys.argv) == 4 and sys.argv[2] == '--stage'
-    if len(sys.argv) != 2 and not promote and not stage and not restore:
+    if len(sys.argv) != 2 and not promote and not stage and not restore and not recover and not cleanup:
         print('Usage: validate-release.py ARCHIVE [--stage NEW_DIRECTORY] | --promote STAGE ACTIVE', file=sys.stderr)
         return 2
     try:
-        if restore:
+        if recover:
+            print('Recovery state: ' + recover_release(sys.argv[2]))
+        elif cleanup:
+            cleanup_release(sys.argv[2])
+            print('Removed confirmed restore staging data')
+        elif restore:
             restore_release(*sys.argv[2:])
             print('Restored release; previous deployment retained')
         elif promote:
