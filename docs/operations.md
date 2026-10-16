@@ -1,5 +1,10 @@
 # cPanel deployment operations
 
+## API diagnostics
+
+See [API error responses](api-error-responses.md) for strict success flags and
+credential-safe handling of failed JSON payloads.
+
 ## Status
 
 `shipper status` reports:

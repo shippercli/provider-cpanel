@@ -162,6 +162,9 @@ final class CpanelApiClient implements CpanelApiClientInterface
             );
 
             $result = $this->normalizeResponse($this->decode((string) $response->getBody()), 'uapi');
+            if (! $result['success']) {
+                return $result;
+            }
             $data = \is_array($result['data']) ? $result['data'] : [];
             $uploads = \is_array($data['uploads'] ?? null) ? $data['uploads'] : [];
             if ($result['success'] && (int) ($data['failed'] ?? 0) > 0) {
@@ -170,12 +173,16 @@ final class CpanelApiClient implements CpanelApiClientInterface
             }
 
             foreach ($uploads as $upload) {
-                if (\is_array($upload) && isset($upload['status']) && (int) $upload['status'] !== 1) {
+                if (\is_array($upload) && ($this->hasApiErrors($upload) || (\array_key_exists('status', $upload) && ! $this->isSuccessFlag($upload['status'])))) {
                     $result['success'] = false;
                     $result['message'] = $this->findValueByKeys($upload, ['reason', 'error']) ?? 'cPanel file upload failed';
 
                     break;
                 }
+            }
+
+            if (! $result['success']) {
+                return $this->failedResponse($this->safeApiFailureMessage($result['message']));
             }
 
             return $result;
@@ -374,12 +381,12 @@ final class CpanelApiClient implements CpanelApiClientInterface
         if ($surface === 'api2') {
             $result = \is_array($payload['cpanelresult'] ?? null) ? $payload['cpanelresult'] : $payload;
             $event = \is_array($result['event'] ?? null) ? $result['event'] : [];
-            $success = (int) ($event['result'] ?? 0) === 1;
+            $success = $this->isSuccessFlag($event['result'] ?? null) && ! $this->hasApiErrors($result) && ! $this->hasApiErrors($payload);
             $data = $result['data'] ?? [];
 
             if (\is_array($data)) {
                 foreach ($data as $item) {
-                    if (\is_array($item) && isset($item['result']) && (int) $item['result'] !== 1) {
+                    if (\is_array($item) && ($this->hasApiErrors($item) || (\array_key_exists('result', $item) && ! $this->isSuccessFlag($item['result'])))) {
                         $success = false;
                         break;
                     }
@@ -392,35 +399,74 @@ final class CpanelApiClient implements CpanelApiClientInterface
                 }
             }
 
-            return [
-                'success' => $success,
-                'message' => $this->extractMessage($result),
-                'data' => $data,
-                'raw' => $payload,
-            ];
+            return $this->safeApiResponse($success, $this->extractMessage($result), $data, $payload);
         }
 
         if ($surface === 'whm') {
             $metadata = \is_array($payload['metadata'] ?? null) ? $payload['metadata'] : [];
 
-            return [
-                'success' => (int) ($metadata['result'] ?? 0) === 1,
-                'message' => $this->extractMessage($metadata),
-                'data' => $payload['data'] ?? null,
-                'raw' => $payload,
-            ];
+            return $this->safeApiResponse(
+                $this->isSuccessFlag($metadata['result'] ?? null) && ! $this->hasApiErrors($metadata) && ! $this->hasApiErrors($payload),
+                $this->extractMessage($metadata), $payload['data'] ?? null, $payload,
+            );
         }
 
         $result = \is_array($payload['result'] ?? null) && \array_key_exists('status', $payload['result'])
             ? $payload['result']
             : $payload;
 
-        return [
-            'success' => (int) ($result['status'] ?? 0) === 1,
-            'message' => $this->extractMessage($result),
-            'data' => $result['data'] ?? null,
-            'raw' => $payload,
-        ];
+        return $this->safeApiResponse(
+            $this->isSuccessFlag($result['status'] ?? null) && ! $this->hasApiErrors($result) && ! $this->hasApiErrors($payload),
+            $this->extractMessage($result), $result['data'] ?? null, $payload,
+        );
+    }
+
+    private function isSuccessFlag(mixed $value): bool
+    {
+        return $value === 1 || $value === '1' || $value === true;
+    }
+
+    /** @param array<string, mixed> $result */
+    private function hasApiErrors(array $result): bool
+    {
+        foreach (['errors', 'error'] as $key) {
+            if (\array_key_exists($key, $result) && ! \in_array($result[$key], [null, '', []], true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @return array{success: bool, message: string, data: mixed, raw: array<string, mixed>}
+     */
+    private function safeApiResponse(bool $success, string $message, mixed $data, array $payload): array
+    {
+        if (! $success) {
+            return $this->failedResponse($this->safeApiFailureMessage($message));
+        }
+
+        return ['success' => true, 'message' => 'OK', 'data' => $data, 'raw' => $payload];
+    }
+
+    private function safeApiFailureMessage(string $message): string
+    {
+        $message = \strtolower($message);
+
+        return match (true) {
+            \str_contains($message, 'permission denied'), \str_contains($message, 'access denied'),
+                \str_contains($message, 'unauthorized') => 'cPanel API access denied',
+            \str_contains($message, 'already exists'), \str_contains($message, 'already configured') => 'cPanel API resource already exists',
+            \str_contains($message, 'no such file'), \str_contains($message, 'not found'),
+                \str_contains($message, 'does not exist') => 'cPanel API resource not found',
+            \str_contains($message, 'timed out'), \str_contains($message, 'timeout') => 'cPanel API operation timed out',
+            (\str_contains($message, 'feature') || \str_contains($message, 'module'))
+                && (\str_contains($message, 'disabled') || \str_contains($message, 'unknown') || \str_contains($message, 'not enabled')
+                    || \str_contains($message, 'unavailable')) => 'cPanel API feature unavailable',
+            default => 'cPanel API reported failure',
+        };
     }
 
     /**
