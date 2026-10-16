@@ -1091,9 +1091,11 @@ test('rollback restores a selected managed release archive', function (): void {
         $client->success(['content' => \json_encode($manifest, JSON_THROW_ON_ERROR)]),
         $client->success(['content' => "0\n"]),
     ];
-    $client->responses['uapi:Fileman:list_files'] = $client->success([
-        ['file' => $release, 'type' => 'file'],
-    ]);
+    $client->responseQueues['uapi:Fileman:list_files'] = [
+        $client->success([['file' => $release, 'type' => 'file']]),
+        $client->success([['file' => 'old.html', 'type' => 'file']]),
+        $client->success([]),
+    ];
     $client->responses['api2:Cron:add_line'] = $client->success([['linekey' => '92']]);
 
     expect($provider->rollback(

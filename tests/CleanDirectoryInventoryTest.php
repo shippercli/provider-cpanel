@@ -40,7 +40,10 @@ test('directory cleanup refuses account roots and ambiguous directory paths', fu
 test('valid directory inventories clean only exact children and preserve well-known', function (bool $mapping): void {
     $client = new FakeCpanelApiClient;
     $rows = [['file' => 'index.html', 'type' => 'file'], ['file' => '.well-known', 'type' => 'dir']];
-    $client->responses['uapi:Fileman:list_files'] = $client->success($mapping ? ['dirs' => [$rows[1]], 'files' => [$rows[0]]] : $rows);
+    $client->responseQueues['uapi:Fileman:list_files'] = [
+        $client->success($mapping ? ['dirs' => [$rows[1]], 'files' => [$rows[0]]] : $rows),
+        $client->success([['file' => '.well-known', 'type' => 'dir']]),
+    ];
     $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
     $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'], 'cpanel' => ['archive_extraction' => 'direct']]);
     expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeTrue();
@@ -55,5 +58,46 @@ test('directory inventory API rejection stops deployment', function (): void {
     $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'], 'cpanel' => ['archive_extraction' => 'direct']]);
     expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
         ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toBeEmpty()
+        ->and($client->uploadedFiles)->toBeEmpty();
+});
+
+
+test('cleanup does not report success when trash acknowledgement leaves files behind', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:Fileman:list_files'] = $client->success([['file' => 'index.html', 'type' => 'file']]);
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'], 'cpanel' => ['archive_extraction' => 'direct']]);
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+        ->and($provider->getLastError())->toContain('directory cleanup could not be verified')
+        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toHaveCount(1)
+        ->and($client->uploadedFiles)->toBeEmpty();
+});
+
+
+test('unreadable post-trash inventories stop before upload', function (mixed $remaining): void {
+    $client = new FakeCpanelApiClient;
+    $client->responseQueues['uapi:Fileman:list_files'] = [
+        $client->success([['file' => 'old.html', 'type' => 'file']]),
+        $client->success($remaining),
+    ];
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'], 'cpanel' => ['archive_extraction' => 'direct']]);
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+        ->and($provider->getLastError())->toContain('directory inventory')
+        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toHaveCount(1)
+        ->and($client->uploadedFiles)->toBeEmpty();
+})->with([[null], [['dirs' => []]], [[['file' => '../outside', 'type' => 'file']]]]);
+
+
+test('cleanup refuses to continue if a protected entry disappears', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responseQueues['uapi:Fileman:list_files'] = [
+        $client->success([['file' => 'old.html', 'type' => 'file'], ['file' => '.well-known', 'type' => 'dir']]),
+        $client->success([]),
+    ];
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'], 'cpanel' => ['archive_extraction' => 'direct']]);
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+        ->and($provider->getLastError())->toContain('protected .well-known is missing')
         ->and($client->uploadedFiles)->toBeEmpty();
 });

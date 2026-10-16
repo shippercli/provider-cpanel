@@ -2206,12 +2206,9 @@ final class CpanelProvider implements
         ]), "Remove Shipper-managed cPanel releases for {$project} ({$profile})");
     }
 
-    private function cleanManagedDirectory(string $directory): void
+    /** @return list<string> */
+    private function managedDirectoryInventory(string $directory): array
     {
-        if (! $this->isSafeManagedPath($directory) || \strpbrk($directory, ',%\\') !== false
-            || \preg_match('/[\x00-\x1f\x7f]/', $directory)) {
-            throw new RuntimeException('Unsafe cPanel deployment directory inventory target');
-        }
         $result = $this->api()->uapi('Fileman', 'list_files', [
             'dir' => $directory,
             'show_hidden' => 1,
@@ -2239,7 +2236,16 @@ final class CpanelProvider implements
             }
             $names[$name] = true;
         }
-        $names = \array_keys($names);
+        return \array_map('strval', \array_keys($names));
+    }
+
+    private function cleanManagedDirectory(string $directory): void
+    {
+        if (! $this->isSafeManagedPath($directory) || \strpbrk($directory, ',%\\') !== false
+            || \preg_match('/[\x00-\x1f\x7f]/', $directory)) {
+            throw new RuntimeException('Unsafe cPanel deployment directory inventory target');
+        }
+        $names = $this->managedDirectoryInventory($directory);
         $managed = [];
         foreach ($names as $name) {
             if (\in_array($name, ['.', '..', '.well-known'], true)) {
@@ -2257,6 +2263,15 @@ final class CpanelProvider implements
             'sourcefiles' => \implode(',', $managed),
             'doubledecode' => 1,
         ]), "Clean cPanel deployment directory {$directory}");
+        $remainingNames = $this->managedDirectoryInventory($directory);
+        if (\in_array('.well-known', $names, true) && ! \in_array('.well-known', $remainingNames, true)) {
+            throw new RuntimeException('cPanel deployment directory cleanup could not be verified; protected .well-known is missing');
+        }
+        foreach ($remainingNames as $remaining) {
+            if (! \in_array($remaining, ['.', '..', '.well-known'], true)) {
+                throw new RuntimeException('cPanel deployment directory cleanup could not be verified; files remain after trash operation');
+            }
+        }
     }
 
     private function ensureRemoteDirectory(string $directory): void
