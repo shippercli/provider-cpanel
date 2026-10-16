@@ -876,15 +876,44 @@ final class CpanelProvider implements
         $resources = [];
         $environment = [];
 
+        $databases = $this->databaseConfigs($project, $profile);
+        $states = [];
+        $databaseNames = [];
+        $userPasswords = [];
+        foreach ($databases as $database) {
+            $type = $database['type'];
+            $name = $this->qualifiedDatabaseName($database['name']);
+            $user = $database['user'] === '' ? '' : $this->qualifiedDatabaseName($database['user']);
+            $databaseKey = $type.':'.$name;
+            $userKey = $type.':'.$user;
+            if (isset($databaseNames[$databaseKey])) {
+                throw new RuntimeException('Duplicate cPanel database identity');
+            }
+            $databaseNames[$databaseKey] = true;
+            if ($user !== '') {
+                if (isset($userPasswords[$userKey]) && $userPasswords[$userKey] !== $database['password']) {
+                    throw new RuntimeException('Conflicting passwords for a shared cPanel database user');
+                }
+                $userPasswords[$userKey] = $database['password'];
+            }
+            $states[$databaseKey] = match ($type) {
+                'mysql' => [$this->mysqlDatabaseExists($name), $user === '' || $this->mysqlUserExists($user)],
+                'postgresql' => [$this->postgresDatabaseExists($name), $user === '' || $this->postgresUserExists($user)],
+                default => throw new RuntimeException("Unsupported cPanel database type: {$type}"),
+            };
+        }
+
+        $createdUsers = [];
         foreach ($this->databaseConfigs($project, $profile) as $index => $database) {
             $type = $database['type'];
             $name = $this->qualifiedDatabaseName($database['name']);
             $user = $database['user'] === '' ? '' : $this->qualifiedDatabaseName($database['user']);
             $password = $database['password'];
+            [$databaseExisted, $userExisted] = $states[$type.':'.$name];
+            $userKey = $type.':'.$user;
+            $userExisted = $userExisted || isset($createdUsers[$userKey]);
 
             if ($type === 'mysql') {
-                $databaseExisted = $this->mysqlDatabaseExists($name);
-                $userExisted = $user === '' ? true : $this->mysqlUserExists($user);
                 if (! $databaseExisted) {
                     $this->required(
                         $this->api()->uapi('Mysql', 'create_database', ['name' => $name]),
@@ -897,6 +926,7 @@ final class CpanelProvider implements
                         'name' => $user,
                         'password' => $password,
                     ]), "Create MySQL user {$user}");
+                    $createdUsers[$userKey] = true;
                 } elseif ($user !== '' && $password !== '' && $this->boolDatabaseOption($database, 'update_password', false)) {
                     $this->required($this->api()->uapi('Mysql', 'set_password', [
                         'user' => $user,
@@ -912,8 +942,6 @@ final class CpanelProvider implements
                     ]), "Set MySQL privileges for {$user}");
                 }
             } elseif ($type === 'postgresql') {
-                $databaseExisted = $this->postgresDatabaseExists($name);
-                $userExisted = $user === '' ? true : $this->postgresUserExists($user);
                 if (! $databaseExisted) {
                     $this->required(
                         $this->api()->uapi('Postgresql', 'create_database', ['name' => $name]),
@@ -926,6 +954,7 @@ final class CpanelProvider implements
                         'name' => $user,
                         'password' => $password,
                     ]), "Create PostgreSQL user {$user}");
+                    $createdUsers[$userKey] = true;
                 }
 
                 if ($user !== '') {
