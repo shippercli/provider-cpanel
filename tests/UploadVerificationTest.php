@@ -60,3 +60,57 @@ test('multipart acceptance reports cover every filename exactly once regardless 
         unlink($secondPath);
     }
 })->with([true, false]);
+
+
+test('upload report errors override matching acceptance records', function (string $scope, string $key, mixed $error): void {
+    $history = [];
+    $data = ['failed' => 0, 'succeeded' => 1,
+        'uploads' => [['file' => 'fixture.txt', 'status' => 1, 'size' => 7]]];
+    if ($scope === 'report') {
+        $data[$key] = $error;
+    } else {
+        $data['uploads'][0][$key] = $error;
+    }
+    $client = cpanelTestClient([new Response(200, [], json_encode(['status' => 1, 'data' => $data]))], $history);
+    $api = new CpanelApiClient(['host' => 'cpanel.example.com', 'username' => 'shipper', 'api_token' => 'synthetic-token'], $client);
+    $file = tempnam(sys_get_temp_dir(), 'shipper-upload-error-');
+    file_put_contents($file, 'fixture');
+    try {
+        $result = $api->uploadFile('/app', $file, 'fixture.txt');
+        expect($result)->toBe([
+            'success' => false,
+            'message' => 'cPanel upload response did not confirm every requested file',
+            'data' => null,
+            'raw' => [],
+        ]);
+    } finally {
+        unlink($file);
+    }
+})->with(['report', 'file'])->with(['error', 'errors'])->with([
+    'message' => ['synthetic-token'],
+    'list' => [['synthetic-token']],
+    'object' => [['message' => 'synthetic-token']],
+    'false' => [false],
+    'zero' => [0],
+]);
+
+
+test('empty upload error fields preserve valid acceptance reports', function (string $key, mixed $error): void {
+    $history = [];
+    $data = ['failed' => 0, 'succeeded' => 1, $key => $error,
+        'uploads' => [['file' => 'fixture.txt', 'status' => 1, 'size' => 7, $key => $error]]];
+    $client = cpanelTestClient([new Response(200, [], json_encode(['status' => 1, 'data' => $data]))], $history);
+    $api = new CpanelApiClient(['host' => 'cpanel.example.com', 'username' => 'shipper', 'api_token' => 'synthetic-token'], $client);
+    $file = tempnam(sys_get_temp_dir(), 'shipper-upload-empty-error-');
+    file_put_contents($file, 'fixture');
+    try {
+        $result = $api->uploadFile('/app', $file, 'fixture.txt');
+        expect($result['success'])->toBeTrue()->and($result['data'])->toBe($data);
+    } finally {
+        unlink($file);
+    }
+})->with(['error', 'errors'])->with([
+    'null' => [null],
+    'string' => [''],
+    'list' => [[]],
+]);

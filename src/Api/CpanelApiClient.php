@@ -214,6 +214,12 @@ final class CpanelApiClient implements CpanelApiClientInterface
             return false;
         }
 
+        foreach (['error', 'errors'] as $key) {
+            if (\array_key_exists($key, $data) && ! \in_array($data[$key], [null, '', []], true)) {
+                return false;
+            }
+        }
+
         $seen = [];
         foreach ($data['uploads'] as $upload) {
             if (! \is_array($upload) || ! \is_string($upload['file'] ?? null)

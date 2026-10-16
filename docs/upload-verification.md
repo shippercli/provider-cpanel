@@ -8,7 +8,11 @@ Canonical decimal strings are accepted alongside integer counts and sizes.
 Empty files are valid, and response order need not match request order.
 
 Missing reports, duplicate or unexpected names, malformed counters, failed
-statuses and size mismatches fail the upload. Local file handles still close on
+statuses and size mismatches fail the upload. A nonempty `error` or `errors`
+field on either the overall upload report or a file record overrides matching
+counts and sizes. Only absent, null, empty string, or empty array error fields
+are accepted. Contradictory reports return a fixed failure message with no
+response data or raw response, so echoed credentials cannot escape through them. Local file handles still close on
 failure. Warnings remain available in successful results for caller inspection.
 
 These checks verify cPanel's acceptance reports. They do not read back remote
