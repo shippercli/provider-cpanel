@@ -22,7 +22,10 @@ test('deployment flags reject non-booleans before validation plan apply or rollb
 
 test('quoted false cannot authorize deployment directory trashing', function (): void {
     $client = new FakeCpanelApiClient;
-    $client->responses['uapi:Fileman:list_files'] = $client->success([['file' => 'index.html', 'type' => 'file']]);
+    $client->responseQueues['uapi:Fileman:list_files'] = [
+        $client->success([['file' => 'index.html', 'type' => 'file']]),
+        $client->success([]),
+    ];
     $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
     $profile = new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app', 'runtime' => ['type' => 'static'],
         'cpanel' => ['clean' => 'false', 'archive_extraction' => 'direct']]);
@@ -32,7 +35,10 @@ test('quoted false cannot authorize deployment directory trashing', function ():
 
 test('genuine clean booleans and the omitted default preserve cleanup choices', function (mixed $clean): void {
     $client = new FakeCpanelApiClient;
-    $client->responses['uapi:Fileman:list_files'] = $client->success([['file' => 'index.html', 'type' => 'file']]);
+    $client->responseQueues['uapi:Fileman:list_files'] = [
+        $client->success([['file' => 'index.html', 'type' => 'file']]),
+        $client->success([]),
+    ];
     $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
     $options = ['archive_extraction' => 'direct', 'adopt_existing' => true];
     if ($clean !== 'omitted') $options['clean'] = $clean;
