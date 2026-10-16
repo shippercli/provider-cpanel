@@ -34,6 +34,14 @@ Release identifiers cannot contain paths. Shipper cleans only the
 manifest-owned deployment path, preserves `.well-known`, and extracts the
 selected archive through a monitored account task.
 
+## Transport error diagnostics
+
+HTTP failures report a status code; connection and JSON decoding failures use
+fixed error categories. Request URLs, response bodies and raw exception text
+are omitted from these diagnostics because they can contain credentials.
+This covers transport/JSON exceptions, including uploads; API-level JSON error
+payloads and custom operation output still require separate review.
+
 ## Destroy
 
 Destroy refuses to proceed without a manifest belonging to the requested
