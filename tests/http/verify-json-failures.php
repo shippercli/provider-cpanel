@@ -39,6 +39,10 @@ try {
                         if (str_contains($encoded, $secret)) throw new RuntimeException('JSON failure leaked a synthetic credential or payload');
                     }
                     $message = str_ends_with($case, 'root') ? 'cPanel API returned invalid JSON' : 'cPanel API reported failure';
+                    if ($surface === 'upload' && $case === 'nestederror'
+                        && $result['message'] === 'cPanel upload response did not confirm every requested file') {
+                        $message = $result['message'];
+                    }
                     if ($result !== ['success' => false, 'message' => $message, 'data' => null, 'raw' => []]) {
                         throw new RuntimeException('Invalid JSON failure shape: '.$surface.'/'.$case);
                     }
