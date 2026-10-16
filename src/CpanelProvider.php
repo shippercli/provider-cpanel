@@ -85,6 +85,10 @@ final class CpanelProvider implements
     public function validate(object $project, object $profile): array
     {
         $errors = [];
+        $booleanError = $this->deploymentBooleanError($profile);
+        if ($booleanError !== null) {
+            $errors[] = $booleanError;
+        }
 
         if ($this->stringConfig('host') === '') {
             $errors[] = 'cPanel host is required';
@@ -167,6 +171,10 @@ final class CpanelProvider implements
     {
         $domain = $this->domain($profile);
         $method = $this->deploymentMethod($project, $profile);
+        $booleanError = $this->deploymentBooleanError($profile);
+        if ($booleanError !== null) {
+            throw new RuntimeException($booleanError);
+        }
         $runtime = $this->runtimeConfig($project, $profile);
         $accountResources = $this->accountResourceConfigs($project, $profile);
         $actions = [
@@ -261,7 +269,10 @@ final class CpanelProvider implements
 
     public function apply(object $project, object $profile): bool
     {
-        $this->lastError = '';
+        $this->lastError = $this->deploymentBooleanError($profile) ?? '';
+        if ($this->lastError !== '') {
+            return false;
+        }
 
         try {
             $context = $this->context($project, $profile);
@@ -493,7 +504,10 @@ final class CpanelProvider implements
         object $profile,
         ?string $release = null,
     ): bool {
-        $this->lastError = '';
+        $this->lastError = $this->deploymentBooleanError($profile) ?? '';
+        if ($this->lastError !== '') {
+            return false;
+        }
 
         try {
             $manifest = $this->matchingManifest($project, $profile, 'rollback');
@@ -3341,11 +3355,27 @@ final class CpanelProvider implements
         return $this->arrayString($this->cpanelOptions($profile), $key, $default);
     }
 
+    private function deploymentBooleanError(object $profile): ?string
+    {
+        $options = $this->cpanelOptions($profile);
+        foreach (['clean', 'backup_before_deploy', 'backup_before_rollback', 'environment_file'] as $key) {
+            if (\array_key_exists($key, $options) && ! \is_bool($options[$key])) {
+                return "cPanel {$key} must be a boolean";
+            }
+        }
+
+        return null;
+    }
+
     private function boolCpanelOption(object $profile, string $key, bool $default): bool
     {
         $options = $this->cpanelOptions($profile);
 
-        return isset($options[$key]) ? (bool) $options[$key] : $default;
+        if (\array_key_exists($key, $options) && ! \is_bool($options[$key])) {
+            throw new RuntimeException("cPanel {$key} must be a boolean");
+        }
+
+        return $options[$key] ?? $default;
     }
 
     private function intCpanelOption(object $profile, string $key, int $default): int
