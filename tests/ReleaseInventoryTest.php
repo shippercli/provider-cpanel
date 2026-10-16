@@ -29,7 +29,7 @@ test('documented release inventory selects an ordinary archive', function (): vo
     $client = new FakeCpanelApiClient;
     $manifest = ['project' => 'sample', 'profile' => 'production', 'deploy_path' => '/app', 'domain' => ['domain' => 'app.example.com']];
     $client->responseQueues['uapi:Fileman:get_file_content'] = [
-        $client->success(['content' => json_encode($manifest)]), $client->success(['content' => "0\n"]),
+        $client->success(['content' => json_encode($manifest)]), $client->success(['content' => "0\n"]), $client->success(['content' => "0\n"]),
     ];
     $client->responses['uapi:Fileman:list_files'] = $client->success(['dirs' => [], 'files' => [
         ['file' => '20260727010101-deadbeef.tar.gz', 'type' => 'file'],
@@ -37,7 +37,7 @@ test('documented release inventory selects an ordinary archive', function (): vo
     $client->responses['api2:Cron:add_line'] = $client->success([['linekey' => '92']]);
     $provider = cpanelProviderWithExistingDomain($client);
     expect($provider->rollback(new CpanelTestProject('.'), new CpanelTestProfile(['domain' => 'app.example.com', 'deploy_path' => '/app']), '20260727010101-deadbeef'))->toBeTrue()
-        ->and(cpanelProviderCalls($client, 'api2', 'Cron', 'add_line'))->toHaveCount(1);
+        ->and(cpanelProviderCalls($client, 'api2', 'Cron', 'add_line'))->toHaveCount(2);
 });
 
 test('status distinguishes unavailable and verified empty release inventories', function (bool $available): void {

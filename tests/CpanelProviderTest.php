@@ -1090,6 +1090,7 @@ test('rollback restores a selected managed release archive', function (): void {
     $client->responseQueues['uapi:Fileman:get_file_content'] = [
         $client->success(['content' => \json_encode($manifest, JSON_THROW_ON_ERROR)]),
         $client->success(['content' => "0\n"]),
+        $client->success(['content' => "0\n"]),
     ];
     $client->responses['uapi:Fileman:list_files'] = $client->success([
         ['file' => $release, 'type' => 'file'],
@@ -1105,7 +1106,7 @@ test('rollback restores a selected managed release archive', function (): void {
         '20260727010101-deadbeef',
     ))->toBeTrue();
 
-    $restoreTask = cpanelProviderCalls($client, 'api2', 'Cron', 'add_line')[0];
+    $restoreTask = cpanelProviderCalls($client, 'api2', 'Cron', 'add_line')[1];
     expect($restoreTask['parameters']['command'])
         ->toContain(' -xzf ')
         ->toContain('/.shipper/releases/sample/production/'.$release);

@@ -10,6 +10,12 @@ inventory to authorize changes.
 Status retains its `releases` array and adds `release_inventory.available`.
 An unavailable inventory includes an error; it is not a verified empty listing.
 
-These checks validate inventory metadata. They do not inspect archive contents,
-prove tar extraction safety, establish atomic restore behavior, or prevent
-concurrent changes after listing. Live backup and rollback remain required.
+Before clearing the deployment, rollback lists the selected gzip tar archive with
+its configured tar binary. A failed read stops cleanup and extraction. This
+inspection runs after any optional safety backup, so an archive that disappeared
+during retention also fails before deployment cleanup.
+
+These checks validate inventory metadata and tar readability. They do not
+validate archive member paths, symlinks or application identity; prove safe or
+atomic extraction; or prevent changes between inspection and extraction. Live
+backup and rollback verification remain required.

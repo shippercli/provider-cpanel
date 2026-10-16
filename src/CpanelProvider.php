@@ -517,11 +517,14 @@ final class CpanelProvider implements
                 throw new RuntimeException('Refusing cPanel rollback because the manifest deploy path is unsafe');
             }
 
+            $tar = $this->stringCpanelOption($profile, 'tar_path', '/usr/bin/tar');
+            $inspection = \escapeshellarg($tar).' -tzf '.\escapeshellarg($selected['path']).' > /dev/null';
+            $this->runOneTimeCommand("Inspect cPanel release {$selected['id']}", $inspection, $profile);
+
             $deployDirectory = $this->relativeHomePath($deployPath);
             $this->cleanManagedDirectory($deployDirectory);
             $this->ensureRemoteDirectory($deployDirectory);
 
-            $tar = $this->stringCpanelOption($profile, 'tar_path', '/usr/bin/tar');
             $command = \escapeshellarg($tar).' -xzf '.\escapeshellarg($selected['path'])
                 .' -C '.\escapeshellarg($this->absolutePath($deployPath));
             $this->runOneTimeCommand("Restore cPanel release {$selected['id']}", $command, $profile);
