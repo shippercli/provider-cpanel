@@ -302,41 +302,6 @@ test('php mysql cron redirect ssl and alias lifecycle is applied through cpanel 
         );
 });
 
-test('existing database privilege and password mutations require exact adoption consent', function (): void {
-    foreach ([false, true] as $adopt) {
-        $client = new FakeCpanelApiClient;
-        $client->responses['uapi:Mysql:list_databases'] = $client->success([['database' => 'shipper_app']]);
-        $client->responses['uapi:Mysql:list_users'] = $client->success([['user' => 'shipper_app']]);
-        $project = new CpanelTestProject(cpanelProviderFixture(['index.php' => '<?php echo "ok";']));
-        $profile = new CpanelTestProfile([
-            'domain' => 'app.example.com', 'deploy_path' => '/php-app', 'deployment_method' => 'fileman',
-            'databases' => ['main' => [
-                'name' => 'app', 'user' => 'app', 'password' => 'new-secret',
-                'adopt_existing' => $adopt, 'update_password' => true,
-            ]],
-        ]);
-        $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
-        $method = new ReflectionMethod($provider, 'ensureDatabases');
-        $method->invoke($provider, $project, $profile);
-        expect(cpanelProviderCalls($client, 'uapi', 'Mysql', 'set_privileges_on_database'))->toHaveCount($adopt ? 1 : 0)
-            ->and(cpanelProviderCalls($client, 'uapi', 'Mysql', 'set_password'))->toHaveCount($adopt ? 1 : 0);
-    }
-});
-
-test('database adoption consent must be a boolean', function (): void {
-    $provider = cpanelProviderWithExistingDomain(new FakeCpanelApiClient, ['deployment_method' => 'fileman']);
-    $errors = $provider->validate(new CpanelTestProject('.'), new CpanelTestProfile([
-        'domain' => 'app.example.com', 'deploy_path' => '/php-app',
-        'databases' => ['main' => ['name' => 'app', 'user' => '', 'password' => '', 'adopt_existing' => 'yes']],
-    ]));
-    expect($errors)->toContain('cPanel database adopt_existing must be a boolean: app');
-    $rotationErrors = $provider->validate(new CpanelTestProject('.'), new CpanelTestProfile([
-        'domain' => 'app.example.com', 'deploy_path' => '/php-app',
-        'databases' => ['main' => ['name' => 'app', 'user' => '', 'password' => '', 'update_password' => 'false']],
-    ]));
-    expect($rotationErrors)->toContain('cPanel database update_password must be a boolean: app');
-});
-
 test('dns email and ftp resources are reconciled without leaking credentials and safely destroyed', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [

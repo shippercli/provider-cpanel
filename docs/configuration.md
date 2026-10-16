@@ -65,20 +65,11 @@ databases:
     user: app_production
     password: "${DB_PASSWORD}"
     privileges: ALL PRIVILEGES
-    adopt_existing: false
-    update_password: false
 ```
 
 `mysql` and `postgresql` are supported. cPanel may prefix database and user
 names with the account username. Shipper injects the resolved names into the
-deployment environment. Existing databases and users are discovered and reused
-without privilege or password changes by default. Set `adopt_existing: true` on
-an exact database declaration to authorize privilege reconciliation for an
-existing database. Changing an existing shared cPanel database user's password
-also requires `update_password: true`; password rotation is never implied by
-adoption. Newly created databases receive the configured privileges as part of
-provisioning. Destroy deletes only databases and users Shipper recorded as
-created in its deployment manifest.
+deployment environment.
 
 ## Releases
 

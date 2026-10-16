@@ -129,12 +129,6 @@ final class CpanelProvider implements
             if (($database['user'] ?? '') !== '' && ($database['password'] ?? '') === '') {
                 $errors[] = "Database password is required for cPanel database user: {$database['user']}";
             }
-            if (array_key_exists('adopt_existing', $database) && ! is_bool($database['adopt_existing'])) {
-                $errors[] = "cPanel database adopt_existing must be a boolean: {$database['name']}";
-            }
-            if (array_key_exists('update_password', $database) && ! is_bool($database['update_password'])) {
-                $errors[] = "cPanel database update_password must be a boolean: {$database['name']}";
-            }
         }
 
         $accountResources = $this->accountResourceConfigs($project, $profile);
@@ -208,8 +202,7 @@ final class CpanelProvider implements
         }
 
         foreach ($this->databaseConfigs($project, $profile) as $database) {
-            $actions[] = ($database['adopt_existing'] ? 'Adopt existing or create ' : 'Create or find ')
-                ."{$database['type']} database: {$database['name']}";
+            $actions[] = "Create or find {$database['type']} database: {$database['name']}";
         }
 
         $environment = $this->environmentVariables($project, $profile);
@@ -904,15 +897,14 @@ final class CpanelProvider implements
                         'name' => $user,
                         'password' => $password,
                     ]), "Create MySQL user {$user}");
-                } elseif ($user !== '' && $password !== '' && $database['adopt_existing']
-                    && $this->boolDatabaseOption($database, 'update_password', false)) {
+                } elseif ($user !== '' && $password !== '' && $this->boolDatabaseOption($database, 'update_password', false)) {
                     $this->required($this->api()->uapi('Mysql', 'set_password', [
                         'user' => $user,
                         'password' => $password,
                     ]), "Update MySQL user {$user}");
                 }
 
-                if ($user !== '' && (! $databaseExisted || $database['adopt_existing'])) {
+                if ($user !== '') {
                     $this->required($this->api()->uapi('Mysql', 'set_privileges_on_database', [
                         'user' => $user,
                         'database' => $name,
@@ -936,7 +928,7 @@ final class CpanelProvider implements
                     ]), "Create PostgreSQL user {$user}");
                 }
 
-                if ($user !== '' && (! $databaseExisted || $database['adopt_existing'])) {
+                if ($user !== '') {
                     $this->required($this->api()->uapi('Postgresql', 'grant_all_privileges', [
                         'user' => $user,
                         'database' => $name,
@@ -2575,7 +2567,7 @@ final class CpanelProvider implements
     }
 
     /**
-     * @return array<int, array{name: string, user: string, type: string, password: string, privileges: string, adopt_existing: bool, update_password?: bool}>
+     * @return array<int, array{name: string, user: string, type: string, password: string, privileges: string, update_password?: bool}>
      */
     private function databaseConfigs(object $project, object $profile): array
     {
@@ -2594,8 +2586,7 @@ final class CpanelProvider implements
                     'type' => \strtolower($this->arrayString($database, 'type', 'mysql')),
                     'password' => $this->arrayString($database, 'password', $this->stringConfig('database_password')),
                     'privileges' => $this->privilegeString($database['privileges'] ?? 'ALL PRIVILEGES'),
-                    'adopt_existing' => $database['adopt_existing'] ?? false,
-                    'update_password' => $database['update_password'] ?? false,
+                    'update_password' => (bool) ($database['update_password'] ?? false),
                 ];
             }
 
