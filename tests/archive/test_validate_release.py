@@ -4,6 +4,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location('release_validator', Path(__file__).parents[2] / 'resources/validate-release.py')
 validator = importlib.util.module_from_spec(spec)
@@ -76,6 +77,96 @@ class ReleaseValidationTest(unittest.TestCase):
             path.write_bytes(b'not gzip')
             with self.assertRaises(OSError):
                 validator.inspect_release(path)
+
+
+class ReleaseStagingTest(unittest.TestCase):
+    def make_archive(self, path, unsafe_target=None):
+        with tarfile.open(path, 'w:gz') as output:
+            directory = tarfile.TarInfo('app')
+            directory.type = tarfile.DIRTYPE
+            directory.mode = 0o750
+            output.addfile(directory)
+            file = tarfile.TarInfo('app/file.txt')
+            file.size = 7
+            file.mode = 0o640
+            output.addfile(file, io.BytesIO(b'fixture'))
+            link = tarfile.TarInfo('link')
+            link.type = tarfile.SYMTYPE
+            link.linkname = unsafe_target or 'app/file.txt'
+            output.addfile(link)
+            hardlink = tarfile.TarInfo('hardlink')
+            hardlink.type = tarfile.LNKTYPE
+            hardlink.linkname = 'app/file.txt'
+            output.addfile(hardlink)
+
+    def test_stages_content_modes_and_internal_links_privately(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / 'release.tar.gz'
+            self.make_archive(archive)
+            stage = root / 'stage'
+            self.assertEqual(validator.stage_release(archive, stage), 4)
+            self.assertEqual(stage.stat().st_mode & 0o777, 0o700)
+            self.assertEqual((stage / 'archive.tar.gz').stat().st_mode & 0o777, 0o600)
+            self.assertEqual((stage / 'tree/app/file.txt').read_bytes(), b'fixture')
+            self.assertEqual((stage / 'tree/app/file.txt').stat().st_mode & 0o777, 0o640)
+            self.assertEqual((stage / 'tree/app').stat().st_mode & 0o777, 0o750)
+            self.assertTrue((stage / 'tree/link').is_symlink())
+            self.assertEqual((stage / 'tree/link').read_bytes(), b'fixture')
+            self.assertEqual((stage / 'tree/hardlink').stat().st_ino,
+                             (stage / 'tree/app/file.txt').stat().st_ino)
+
+    def test_external_link_refused_without_touching_active_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            active = root / 'active'
+            active.mkdir()
+            sentinel = active / 'private.txt'
+            sentinel.write_text('unchanged')
+            archive = root / 'release.tar.gz'
+            self.make_archive(archive, str(sentinel))
+            stage = root / 'stage'
+            with self.assertRaises(validator.InvalidRelease):
+                validator.stage_release(archive, stage)
+            self.assertEqual(sentinel.read_text(), 'unchanged')
+            self.assertFalse(stage.exists())
+
+    def test_archive_replacement_after_inspection_cannot_change_staged_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / 'release.tar.gz'
+            self.make_archive(archive)
+            original_inspect = validator.inspect_release
+            def replace_original(snapshot):
+                count = original_inspect(snapshot)
+                archive.write_bytes(b'corrupt replacement')
+                return count
+            with mock.patch.object(validator, 'inspect_release', side_effect=replace_original):
+                validator.stage_release(archive, root / 'stage')
+            self.assertEqual((root / 'stage/tree/app/file.txt').read_bytes(), b'fixture')
+
+    def test_existing_destination_and_links_are_never_reused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / 'release.tar.gz'
+            self.make_archive(archive)
+            active = root / 'active'
+            active.mkdir()
+            sentinel = active / 'sentinel'
+            sentinel.write_text('unchanged')
+            link = root / 'stage-link'
+            link.symlink_to(active)
+            for stage in (active, link):
+                with self.assertRaises(FileExistsError):
+                    validator.stage_release(archive, stage)
+                self.assertEqual(sentinel.read_text(), 'unchanged')
+
+    def test_copy_failure_removes_private_staging_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaises(FileNotFoundError):
+                validator.stage_release(root / 'missing.tar.gz', root / 'stage')
+            self.assertFalse((root / 'stage').exists())
 
 
 if __name__ == '__main__':

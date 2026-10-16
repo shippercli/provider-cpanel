@@ -67,3 +67,22 @@ a private immutable archive copy, validate and extract that copy into an empty
 private staging directory, and restore the verified tree without following
 existing deployment links. Failures before staging is complete must preserve
 the active deployment. The current tar readability command remains unchanged.
+
+### Private staging helper
+
+`python3 resources/validate-release.py ARCHIVE --stage NEW_DIRECTORY` creates a
+new mode-0700 directory, copies the archive into a mode-0600 snapshot, validates
+that snapshot, and builds `NEW_DIRECTORY/tree`. Existing destinations, including
+symlinks, are refused. Regular files and directories are created before links;
+archive member permissions and modification times are preserved without copying
+ownership or special permission bits. Hardlinks are created only to staged
+regular files. Failure removes the new staging directory. Success leaves it for
+the caller to restore and then remove.
+
+The staging parent must already be trusted. This helper does not defend against
+another process running as the same account modifying its private directory.
+It does not yet promote the tree into the live deployment, preserve the live
+`.well-known` directory, or establish rollback application identity. Production
+rollback still does not call this helper. Ten Python test methods cover member
+validation and actual staging, including source replacement after inspection,
+external-link rejection, mode/link preservation, and existing destination refusal.
