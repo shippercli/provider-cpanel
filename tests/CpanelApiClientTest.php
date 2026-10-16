@@ -17,6 +17,41 @@ function cpanelTestClient(array $responses, array &$history): Client
     return new Client(['handler' => $stack]);
 }
 
+test('requires HTTPS and certificate verification before accepting cPanel credentials', function (): void {
+    foreach ([
+        ['host' => 'http://cpanel.example.com'],
+        ['host' => 'cpanel.example.com', 'verify_tls' => false],
+        ['host' => 'cpanel.example.com', 'verify_tls' => 'false'],
+    ] as $transport) {
+        expect(fn () => new CpanelApiClient([
+            ...$transport,
+            'username' => 'shipper',
+            'api_token' => 'secret',
+        ]))->toThrow(\InvalidArgumentException::class);
+    }
+});
+
+test('uses HTTPS on explicitly configured cPanel and WHM ports', function (): void {
+    $history = [];
+    $client = cpanelTestClient([
+        new Response(200, [], '{"status":1,"data":[]}'),
+        new Response(200, [], '{"metadata":{"result":1},"data":[]}'),
+    ], $history);
+    $api = new CpanelApiClient([
+        'host' => 'cpanel.example.com',
+        'cpanel_port' => 2082,
+        'whm_port' => 2086,
+        'username' => 'shipper',
+        'api_token' => 'secret',
+    ], $client);
+
+    $api->uapi('Features', 'list_features');
+    $api->whm('listaccts');
+
+    expect((string) $history[0]['request']->getUri())->toStartWith('https://cpanel.example.com:2082/')
+        ->and((string) $history[1]['request']->getUri())->toStartWith('https://cpanel.example.com:2086/');
+});
+
 test('normalizes flat and nested UAPI responses', function (): void {
     $history = [];
     $client = cpanelTestClient([

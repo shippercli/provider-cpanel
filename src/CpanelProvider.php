@@ -88,6 +88,15 @@ final class CpanelProvider implements
 
         if ($this->stringConfig('host') === '') {
             $errors[] = 'cPanel host is required';
+        } else {
+            try {
+                CpanelApiClient::assertSecureTransport([
+                    'host' => $this->stringConfig('host'),
+                    'verify_tls' => $this->config['verify_tls'] ?? true,
+                ]);
+            } catch (\InvalidArgumentException $exception) {
+                $errors[] = $exception->getMessage();
+            }
         }
 
         if ($this->stringConfig('username') === '') {
@@ -128,6 +137,12 @@ final class CpanelProvider implements
         foreach ($this->databaseConfigs($project, $profile) as $database) {
             if (($database['user'] ?? '') !== '' && ($database['password'] ?? '') === '') {
                 $errors[] = "Database password is required for cPanel database user: {$database['user']}";
+            }
+            if (array_key_exists('adopt_existing', $database) && ! is_bool($database['adopt_existing'])) {
+                $errors[] = "cPanel database adopt_existing must be a boolean: {$database['name']}";
+            }
+            if (array_key_exists('update_password', $database) && ! is_bool($database['update_password'])) {
+                $errors[] = "cPanel database update_password must be a boolean: {$database['name']}";
             }
         }
 
@@ -202,7 +217,8 @@ final class CpanelProvider implements
         }
 
         foreach ($this->databaseConfigs($project, $profile) as $database) {
-            $actions[] = "Create or find {$database['type']} database: {$database['name']}";
+            $actions[] = ($database['adopt_existing'] ? 'Adopt existing or create ' : 'Create or find ')
+                ."{$database['type']} database: {$database['name']}";
         }
 
         $environment = $this->environmentVariables($project, $profile);
@@ -247,7 +263,7 @@ final class CpanelProvider implements
             'domain_type' => $this->domainType($profile),
             'deploy_path' => $this->deployPath($profile),
             'deployment_method' => $method,
-            'runtime' => $runtime,
+            'runtime' => $this->runtimeStatusSummary($runtime),
             'database_count' => \count($this->databaseConfigs($project, $profile)),
             'cron_count' => \count($cron),
             'dns_record_count' => \count($accountResources['dns_records']),
@@ -456,8 +472,8 @@ final class CpanelProvider implements
             'deploy_path' => $this->deployPath($profile),
             'manifest_matches' => $manifestMatches,
             'applied_at' => $manifestMatches ? ($manifest['applied_at'] ?? null) : null,
-            'runtime' => $manifestMatches ? ($manifest['runtime'] ?? null) : null,
-            'deployment' => $manifestMatches ? ($manifest['deployment'] ?? null) : null,
+            'runtime' => $manifestMatches ? $this->runtimeStatusSummary($manifest['runtime'] ?? null) : null,
+            'deployment' => $manifestMatches ? $this->deploymentStatusSummary($manifest['deployment'] ?? null) : null,
             'previous_release' => $manifestMatches ? ($manifest['previous_release'] ?? null) : null,
             'deployment_status' => $deploymentStatus,
             'domain_status' => $this->optionalApiResult($domainResult),
@@ -897,14 +913,15 @@ final class CpanelProvider implements
                         'name' => $user,
                         'password' => $password,
                     ]), "Create MySQL user {$user}");
-                } elseif ($user !== '' && $password !== '' && $this->boolDatabaseOption($database, 'update_password', false)) {
+                } elseif ($user !== '' && $password !== '' && $database['adopt_existing']
+                    && $this->boolDatabaseOption($database, 'update_password', false)) {
                     $this->required($this->api()->uapi('Mysql', 'set_password', [
                         'user' => $user,
                         'password' => $password,
                     ]), "Update MySQL user {$user}");
                 }
 
-                if ($user !== '') {
+                if ($user !== '' && (! $databaseExisted || $database['adopt_existing'])) {
                     $this->required($this->api()->uapi('Mysql', 'set_privileges_on_database', [
                         'user' => $user,
                         'database' => $name,
@@ -928,7 +945,7 @@ final class CpanelProvider implements
                     ]), "Create PostgreSQL user {$user}");
                 }
 
-                if ($user !== '') {
+                if ($user !== '' && (! $databaseExisted || $database['adopt_existing'])) {
                     $this->required($this->api()->uapi('Postgresql', 'grant_all_privileges', [
                         'user' => $user,
                         'database' => $name,
@@ -1277,6 +1294,54 @@ final class CpanelProvider implements
         } while (true);
     }
 
+    /** @return array<string, string|bool>|null */
+    private function runtimeStatusSummary(mixed $runtime): ?array
+    {
+        if (! \is_array($runtime)) {
+            return null;
+        }
+
+        $summary = [];
+        foreach (['type', 'version', 'application_root', 'base_uri'] as $key) {
+            if (\is_string($runtime[$key] ?? null)) {
+                $summary[$key] = $runtime[$key];
+            }
+        }
+        if (\is_bool($runtime['install_dependencies'] ?? null)) {
+            $summary['install_dependencies'] = $runtime['install_dependencies'];
+        }
+
+        return $summary;
+    }
+
+    /** @return array<string, mixed>|null */
+    private function deploymentStatusSummary(mixed $deployment): ?array
+    {
+        if (! \is_array($deployment)) {
+            return null;
+        }
+
+        $summary = [];
+        foreach (['method', 'repository_root', 'task_id', 'deploy_id', 'state', 'status'] as $key) {
+            if (isset($deployment[$key]) && (\is_string($deployment[$key]) || \is_int($deployment[$key]))) {
+                $summary[$key] = $deployment[$key];
+            }
+        }
+        if (\is_array($deployment['task'] ?? null)) {
+            $summary['task'] = $this->deploymentStatusSummary($deployment['task']);
+        }
+        if (\is_array($deployment['timestamps'] ?? null)) {
+            foreach (['queued', 'started', 'succeeded', 'failed', 'cancelled'] as $key) {
+                $value = $deployment['timestamps'][$key] ?? null;
+                if (\is_string($value) || \is_int($value)) {
+                    $summary['timestamps'][$key] = $value;
+                }
+            }
+        }
+
+        return $summary;
+    }
+
     /**
      * @param array{available: bool, data: mixed, error?: string}|null $status
      *
@@ -1284,17 +1349,28 @@ final class CpanelProvider implements
      */
     private function scopeGitDeploymentStatus(?array $status, mixed $task): ?array
     {
-        if ($status === null
-            || ! \is_array($task)
-            || ! $this->hasGitDeploymentIdentifier($task)
-            || ! \is_array($status['data'] ?? null)) {
-            return $status;
+        if ($status === null) {
+            return null;
+        }
+        if (! ($status['available'] ?? false)) {
+            return ['available' => false, 'error' => 'cPanel Git deployment status is unavailable.'];
+        }
+        if (! \is_array($status['data'] ?? null) || ! \array_is_list($status['data'])) {
+            return ['available' => false, 'error' => 'cPanel Git deployment status is unreadable.'];
         }
 
-        $status['data'] = \array_values(\array_filter(
-            $status['data'],
-            fn (mixed $record): bool => \is_array($record) && $this->matchesGitDeploymentTask($record, $task),
-        ));
+        $records = [];
+        foreach ($status['data'] as $record) {
+            if (! \is_array($record)) {
+                return ['available' => false, 'error' => 'cPanel Git deployment status is unreadable.'];
+            }
+            if (\is_array($task) && $this->hasGitDeploymentIdentifier($task)
+                && ! $this->matchesGitDeploymentTask($record, $task)) {
+                continue;
+            }
+            $records[] = $this->deploymentStatusSummary($record);
+        }
+        $status['data'] = $records;
 
         return $status;
     }
@@ -2508,7 +2584,7 @@ final class CpanelProvider implements
     }
 
     /**
-     * @return array<int, array{name: string, user: string, type: string, password: string, privileges: string, update_password?: bool}>
+     * @return array<int, array{name: string, user: string, type: string, password: string, privileges: string, adopt_existing: bool, update_password?: bool}>
      */
     private function databaseConfigs(object $project, object $profile): array
     {
@@ -2527,7 +2603,8 @@ final class CpanelProvider implements
                     'type' => \strtolower($this->arrayString($database, 'type', 'mysql')),
                     'password' => $this->arrayString($database, 'password', $this->stringConfig('database_password')),
                     'privileges' => $this->privilegeString($database['privileges'] ?? 'ALL PRIVILEGES'),
-                    'update_password' => (bool) ($database['update_password'] ?? false),
+                    'adopt_existing' => $database['adopt_existing'] ?? false,
+                    'update_password' => $database['update_password'] ?? false,
                 ];
             }
 

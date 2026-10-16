@@ -144,6 +144,24 @@ test('validation rejects missing database password', function (): void {
     expect($errors)->toContain('Database password is required for cPanel database user: app');
 });
 
+test('validation rejects plaintext cPanel endpoints and disabled TLS verification', function (): void {
+    foreach ([
+        [['host' => 'http://cpanel.example.com'], 'cPanel API credentials require HTTPS'],
+        [['host' => 'cpanel.example.com', 'verify_tls' => false], 'cPanel TLS certificate verification must remain enabled'],
+    ] as [$config, $message]) {
+        $provider = new CpanelProvider([
+            ...$config,
+            'username' => 'shipper',
+            'api_token' => 'secret',
+        ], new FakeCpanelApiClient);
+        $errors = $provider->validate(new CpanelTestProject('.'), new CpanelTestProfile([
+            'domain' => 'app.example.com',
+        ]));
+
+        expect($errors)->toContain($message);
+    }
+});
+
 test('fileman apply creates directories and uploads mapped files', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [
@@ -300,6 +318,41 @@ test('php mysql cron redirect ssl and alias lifecycle is applied through cpanel 
             'DB_CONNECTION="mysql"',
             'DB_DATABASE="shipper_app"',
         );
+});
+
+test('existing database privilege and password mutations require exact adoption consent', function (): void {
+    foreach ([false, true] as $adopt) {
+        $client = new FakeCpanelApiClient;
+        $client->responses['uapi:Mysql:list_databases'] = $client->success([['database' => 'shipper_app']]);
+        $client->responses['uapi:Mysql:list_users'] = $client->success([['user' => 'shipper_app']]);
+        $project = new CpanelTestProject(cpanelProviderFixture(['index.php' => '<?php echo "ok";']));
+        $profile = new CpanelTestProfile([
+            'domain' => 'app.example.com', 'deploy_path' => '/php-app', 'deployment_method' => 'fileman',
+            'databases' => ['main' => [
+                'name' => 'app', 'user' => 'app', 'password' => 'new-secret',
+                'adopt_existing' => $adopt, 'update_password' => true,
+            ]],
+        ]);
+        $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+        $method = new ReflectionMethod($provider, 'ensureDatabases');
+        $method->invoke($provider, $project, $profile);
+        expect(cpanelProviderCalls($client, 'uapi', 'Mysql', 'set_privileges_on_database'))->toHaveCount($adopt ? 1 : 0)
+            ->and(cpanelProviderCalls($client, 'uapi', 'Mysql', 'set_password'))->toHaveCount($adopt ? 1 : 0);
+    }
+});
+
+test('database adoption consent must be a boolean', function (): void {
+    $provider = cpanelProviderWithExistingDomain(new FakeCpanelApiClient, ['deployment_method' => 'fileman']);
+    $errors = $provider->validate(new CpanelTestProject('.'), new CpanelTestProfile([
+        'domain' => 'app.example.com', 'deploy_path' => '/php-app',
+        'databases' => ['main' => ['name' => 'app', 'user' => '', 'password' => '', 'adopt_existing' => 'yes']],
+    ]));
+    expect($errors)->toContain('cPanel database adopt_existing must be a boolean: app');
+    $rotationErrors = $provider->validate(new CpanelTestProject('.'), new CpanelTestProfile([
+        'domain' => 'app.example.com', 'deploy_path' => '/php-app',
+        'databases' => ['main' => ['name' => 'app', 'user' => '', 'password' => '', 'update_password' => 'false']],
+    ]));
+    expect($rotationErrors)->toContain('cPanel database update_password must be a boolean: app');
 });
 
 test('dns email and ftp resources are reconciled without leaking credentials and safely destroyed', function (): void {
@@ -1120,13 +1173,14 @@ test('status reports manifest deployment resource usage and releases', function 
             'profile' => 'production',
             'deploy_path' => '/app',
             'applied_at' => '2026-07-27T01:02:03+00:00',
-            'runtime' => ['type' => 'php'],
+            'runtime' => ['type' => 'php', 'php_ini' => ['sendmail_path' => 'private-status-token']],
             'deployment' => [
                 'method' => 'git',
                 'repository_root' => '/home/shipper/app',
                 'task' => [
                     'task_id' => 'current-task',
                     'deploy_id' => 2,
+                    'command' => 'echo private-status-token',
                 ],
             ],
             'previous_release' => [
@@ -1140,7 +1194,7 @@ test('status reports manifest deployment resource usage and releases', function 
     ]);
     $client->responses['uapi:VersionControlDeployment:retrieve'] = $client->success([
         ['task_id' => 'old-task', 'deploy_id' => 1, 'state' => 'succeeded'],
-        ['task_id' => 'current-task', 'deploy_id' => 2, 'state' => 'succeeded'],
+        ['task_id' => 'current-task', 'deploy_id' => 2, 'state' => 'succeeded', 'output' => 'private-status-token'],
     ]);
     $client->responses['uapi:Fileman:list_files'] = $client->success([
         ['file' => '20260727010101-deadbeef.tar.gz'],
@@ -1153,6 +1207,8 @@ test('status reports manifest deployment resource usage and releases', function 
             'deploy_path' => '/app',
         ]),
     );
+
+    expect(json_encode($status, JSON_THROW_ON_ERROR))->not->toContain('private-status-token');
 
     expect($status['state'])->toBe('deployed')
         ->and($status['manifest_matches'])->toBeTrue()
@@ -1272,4 +1328,47 @@ test('explicit git deployment reports unavailable account features precisely', f
     ))->toBeFalse()
         ->and($provider->getLastError())
         ->toBe('List cPanel Git repositories failed: Git Version Control is not enabled for this account');
+});
+
+test('git status summaries reject malformed responses and hide remote errors', function (array $input, string $message): void {
+    $provider = cpanelProviderWithExistingDomain(new FakeCpanelApiClient);
+    $method = new ReflectionMethod($provider, 'scopeGitDeploymentStatus');
+    expect($method->invoke($provider, $input, null))->toBe([
+        'available' => false,
+        'error' => $message,
+    ]);
+})->with([
+    [['available' => false, 'error' => 'private-status-token'], 'cPanel Git deployment status is unavailable.'],
+    [['available' => true, 'data' => 'private-status-token'], 'cPanel Git deployment status is unreadable.'],
+    [['available' => true, 'data' => ['command' => 'private-status-token']], 'cPanel Git deployment status is unreadable.'],
+    [['available' => true, 'data' => ['private-status-token']], 'cPanel Git deployment status is unreadable.'],
+]);
+
+test('git status without a saved task still filters raw output', function (): void {
+    $provider = cpanelProviderWithExistingDomain(new FakeCpanelApiClient);
+    $method = new ReflectionMethod($provider, 'scopeGitDeploymentStatus');
+    expect($method->invoke($provider, [
+        'available' => true,
+        'data' => [[
+            'task_id' => 12,
+            'state' => 'succeeded',
+            'output' => 'private-status-token',
+            'timestamps' => ['succeeded' => 123, 'command' => 'private-status-token'],
+        ]],
+    ], null))->toBe([
+        'available' => true,
+        'data' => [['task_id' => 12, 'state' => 'succeeded', 'timestamps' => ['succeeded' => 123]]],
+    ]);
+});
+
+
+test('plan summarizes runtime without exposing php ini configuration', function (): void {
+    $provider = cpanelProviderWithExistingDomain(new FakeCpanelApiClient);
+    $plan = $provider->plan(new CpanelTestProject('.'), new CpanelTestProfile([
+        'domain' => 'app.example.com',
+        'deploy_path' => '/app',
+        'runtime' => ['type' => 'php', 'version' => '8.4', 'php_ini' => ['sendmail_path' => 'private-plan-token']],
+    ]));
+    expect(json_encode($plan, JSON_THROW_ON_ERROR))->not->toContain('private-plan-token');
+    expect($plan['runtime']['version'])->toBe('8.4');
 });
