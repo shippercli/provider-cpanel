@@ -160,6 +160,12 @@ final class CpanelProvider implements
             }
         }
 
+        try {
+            $this->assertAccountResourceOptions($profile);
+        } catch (RuntimeException $exception) {
+            $errors[] = $exception->getMessage();
+        }
+
         return $errors;
     }
 
@@ -168,6 +174,7 @@ final class CpanelProvider implements
         $domain = $this->domain($profile);
         $method = $this->deploymentMethod($project, $profile);
         $runtime = $this->runtimeConfig($project, $profile);
+        $this->assertAccountResourceOptions($profile);
         $accountResources = $this->accountResourceConfigs($project, $profile);
         $actions = [
             'Discover enabled cPanel account features',
@@ -264,6 +271,7 @@ final class CpanelProvider implements
         $this->lastError = '';
 
         try {
+            $this->assertAccountResourceOptions($profile);
             $context = $this->context($project, $profile);
             $previousManifest = $this->readManifest($profile);
             if ($previousManifest !== null && ! $this->manifestMatches($previousManifest, $project, $profile)) {
@@ -2556,6 +2564,23 @@ final class CpanelProvider implements
         return $result;
     }
 
+    private function assertAccountResourceOptions(object $profile): void
+    {
+        $options = $this->cpanelOptions($profile);
+        foreach ([
+            'email_accounts' => ['create', 'manage_existing', 'update_password', 'delete_data', 'send_welcome_email'],
+            'ftp_accounts' => ['create', 'manage_existing', 'update_password', 'delete_home'],
+        ] as $resource => $flags) {
+            foreach ($this->resourceConfigEntries($options[$resource] ?? []) as $entry) {
+                foreach ($flags as $flag) {
+                    if (\array_key_exists($flag, $entry) && ! \is_bool($entry[$flag])) {
+                        throw new RuntimeException("cPanel {$resource}.{$flag} must be a boolean");
+                    }
+                }
+            }
+        }
+    }
+
     /**
      * @return array{
      *     dns_records: array<int, array{zone: string, name: string, type: string, data: array<int, string>, ttl: int}>,
@@ -2598,11 +2623,11 @@ final class CpanelProvider implements
                 'password' => $this->interpolate($this->arrayString($entry, 'password'), $project, $profile),
                 'password_hash' => $this->interpolate($this->arrayString($entry, 'password_hash'), $project, $profile),
                 'quota' => $this->nullableInteger($entry['quota'] ?? null),
-                'create' => ! isset($entry['create']) || (bool) $entry['create'],
-                'manage_existing' => (bool) ($entry['manage_existing'] ?? false),
-                'update_password' => (bool) ($entry['update_password'] ?? false),
-                'send_welcome_email' => (bool) ($entry['send_welcome_email'] ?? false),
-                'delete_data' => (bool) ($entry['delete_data'] ?? false),
+                'create' => ! \array_key_exists('create', $entry) || $entry['create'] === true,
+                'manage_existing' => ($entry['manage_existing'] ?? false) === true,
+                'update_password' => ($entry['update_password'] ?? false) === true,
+                'send_welcome_email' => ($entry['send_welcome_email'] ?? false) === true,
+                'delete_data' => ($entry['delete_data'] ?? false) === true,
             ];
         }
 
@@ -2643,10 +2668,10 @@ final class CpanelProvider implements
                     $project,
                     $profile,
                 ), '/'),
-                'create' => ! isset($entry['create']) || (bool) $entry['create'],
-                'manage_existing' => (bool) ($entry['manage_existing'] ?? false),
-                'update_password' => (bool) ($entry['update_password'] ?? false),
-                'delete_home' => (bool) ($entry['delete_home'] ?? false),
+                'create' => ! \array_key_exists('create', $entry) || $entry['create'] === true,
+                'manage_existing' => ($entry['manage_existing'] ?? false) === true,
+                'update_password' => ($entry['update_password'] ?? false) === true,
+                'delete_home' => ($entry['delete_home'] ?? false) === true,
             ];
         }
 
