@@ -71,6 +71,28 @@ databases:
 names with the account username. Shipper injects the resolved names into the
 deployment environment.
 
+A single database uses `DB_CONNECTION`, `DB_HOST`, `DB_DATABASE`, `DB_USERNAME`,
+and `DB_PASSWORD`. When declaring multiple databases, map every resolved database
+name (before cPanel's account prefix) to a unique environment prefix in the
+provider configuration:
+
+```yaml
+providers:
+  cpanel:
+    database_environment_prefixes:
+      app_production: DB
+      reports_production: REPORTS_DB
+```
+
+The reports connection supplies `REPORTS_DB_CONNECTION`, `REPORTS_DB_HOST`,
+`REPORTS_DB_DATABASE`, `REPORTS_DB_USERNAME`, and `REPORTS_DB_PASSWORD`. Configure
+the application to read these variables. Prefixes must be uppercase environment
+identifiers; missing or duplicate mappings fail before API mutations. Names
+containing placeholders must be mapped using their resolved values. All
+connections are delivered through Passenger variables or the generated `.env`
+file, according to the runtime. Passwords remain explicitly configured; this
+option does not generate or rotate them.
+
 ## Releases
 
 ```yaml

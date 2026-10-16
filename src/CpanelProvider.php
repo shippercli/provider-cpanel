@@ -125,6 +125,12 @@ final class CpanelProvider implements
             $errors[] = 'Repository URL is required for cPanel Git deployment';
         }
 
+        try {
+            $this->databaseEnvironmentPrefixes($project, $profile);
+        } catch (RuntimeException $exception) {
+            $errors[] = $exception->getMessage();
+        }
+
         foreach ($this->databaseConfigs($project, $profile) as $database) {
             if (($database['user'] ?? '') !== '' && ($database['password'] ?? '') === '') {
                 $errors[] = "Database password is required for cPanel database user: {$database['user']}";
@@ -165,6 +171,7 @@ final class CpanelProvider implements
 
     public function plan(object $project, object $profile): array
     {
+        $this->databaseEnvironmentPrefixes($project, $profile);
         $domain = $this->domain($profile);
         $method = $this->deploymentMethod($project, $profile);
         $runtime = $this->runtimeConfig($project, $profile);
@@ -264,6 +271,7 @@ final class CpanelProvider implements
         $this->lastError = '';
 
         try {
+            $this->databaseEnvironmentPrefixes($project, $profile);
             $context = $this->context($project, $profile);
             $previousManifest = $this->readManifest($profile);
             if ($previousManifest !== null && ! $this->manifestMatches($previousManifest, $project, $profile)) {
@@ -875,8 +883,9 @@ final class CpanelProvider implements
     {
         $resources = [];
         $environment = [];
+        $prefixes = $this->databaseEnvironmentPrefixes($project, $profile);
 
-        foreach ($this->databaseConfigs($project, $profile) as $index => $database) {
+        foreach ($this->databaseConfigs($project, $profile) as $database) {
             $type = $database['type'];
             $name = $this->qualifiedDatabaseName($database['name']);
             $user = $database['user'] === '' ? '' : $this->qualifiedDatabaseName($database['user']);
@@ -946,15 +955,15 @@ final class CpanelProvider implements
                 'user_created' => ! $userExisted,
             ];
 
-            if ($index === 0) {
-                $environment = [
-                    'DB_CONNECTION' => $type === 'postgresql' ? 'pgsql' : 'mysql',
-                    'DB_HOST' => '127.0.0.1',
-                    'DB_DATABASE' => $name,
-                    'DB_USERNAME' => $user,
-                    'DB_PASSWORD' => $password,
-                ];
-            }
+            $prefix = $prefixes[$database['name']];
+            $environment = [
+                ...$environment,
+                $prefix.'_CONNECTION' => $type === 'postgresql' ? 'pgsql' : 'mysql',
+                $prefix.'_HOST' => '127.0.0.1',
+                $prefix.'_DATABASE' => $name,
+                $prefix.'_USERNAME' => $user,
+                $prefix.'_PASSWORD' => $password,
+            ];
         }
 
         return [
@@ -2554,6 +2563,31 @@ final class CpanelProvider implements
         }
 
         return $result;
+    }
+
+    /** @return array<string, string> */
+    private function databaseEnvironmentPrefixes(object $project, object $profile): array
+    {
+        $databases = $this->databaseConfigs($project, $profile);
+        $configured = $this->config['database_environment_prefixes'] ?? [];
+        if (! \is_array($configured)) {
+            throw new RuntimeException('cPanel database_environment_prefixes must be a map of database names to environment prefixes.');
+        }
+
+        $prefixes = [];
+        foreach ($databases as $database) {
+            $name = $database['name'];
+            $prefix = $configured[$name] ?? (\count($databases) === 1 ? 'DB' : null);
+            if ($name === '' || ! \is_string($prefix) || \preg_match('/\A[A-Z_][A-Z0-9_]*\z/', $prefix) !== 1) {
+                throw new RuntimeException('cPanel databases require names and valid database_environment_prefixes entries when multiple databases are declared.');
+            }
+            if (isset($prefixes[$name]) || \in_array($prefix, $prefixes, true)) {
+                throw new RuntimeException('cPanel database names and environment prefixes must be unique.');
+            }
+            $prefixes[$name] = $prefix;
+        }
+
+        return $prefixes;
     }
 
     /**
