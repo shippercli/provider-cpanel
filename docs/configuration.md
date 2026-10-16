@@ -71,6 +71,12 @@ databases:
 names with the account username. Shipper injects the resolved names into the
 deployment environment.
 
+Generated `.env` files preserve literal values, including dollar signs,
+Unicode, quotes, backslashes, and line breaks. A value containing
+`${OTHER_VARIABLE}` is written literally rather than expanded again when the
+application loads the file. Configuration placeholders are resolved before this
+serialization step.
+
 ## Releases
 
 ```yaml
