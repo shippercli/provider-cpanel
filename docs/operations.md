@@ -11,6 +11,11 @@
 - account resource usage availability
 - deployment release identifiers
 
+## API diagnostics
+
+See [API error responses](api-error-responses.md) for strict success flags and
+credential-safe handling of failed JSON payloads.
+
 Optional cPanel modules are reported as unavailable instead of making the
 entire status command fail.
 
