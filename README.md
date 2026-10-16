@@ -8,6 +8,9 @@ Deploy and operate applications on cPanel accounts from Shipper CLI.
 composer require shippercli/provider-cpanel
 ```
 
+Uploaded files must have complete matching cPanel acceptance reports. See
+[upload verification](docs/upload-verification.md) for checks and limits.
+
 Shipper discovers the provider through Composer's plugin metadata. No cPanel
 implementation is bundled into the CLI.
 

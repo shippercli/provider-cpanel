@@ -122,6 +122,7 @@ final class CpanelApiClient implements CpanelApiClientInterface
         }
 
         $handles = [];
+        $expectedSizes = [];
         $options = $this->authenticationOptions(false, $this->cpanelPort);
         $options['multipart'] = [
             [
@@ -147,6 +148,15 @@ final class CpanelApiClient implements CpanelApiClientInterface
             }
 
             $handles[] = $handle;
+            $stat = \fstat($handle);
+            if (! \is_array($stat) || ! \is_int($stat['size'] ?? null) || $stat['size'] < 0) {
+                foreach ($handles as $openedHandle) {
+                    \fclose($openedHandle);
+                }
+
+                return $this->failedResponse('Unable to determine upload file size');
+            }
+            $expectedSizes[$remoteFilename] = $stat['size'];
             $options['multipart'][] = [
                 'name' => 'file-'.\count($handles),
                 'contents' => $handle,
@@ -164,6 +174,10 @@ final class CpanelApiClient implements CpanelApiClientInterface
             $result = $this->normalizeResponse($this->decode((string) $response->getBody()), 'uapi');
             $data = \is_array($result['data']) ? $result['data'] : [];
             $uploads = \is_array($data['uploads'] ?? null) ? $data['uploads'] : [];
+            if ($result['success'] && ! $this->uploadReportMatches($result['data'], $expectedSizes)) {
+                return $this->failedResponse('cPanel upload response did not confirm every requested file');
+            }
+
             if ($result['success'] && (int) ($data['failed'] ?? 0) > 0) {
                 $result['success'] = false;
                 $result['message'] = $this->findValueByKeys($uploads, ['reason', 'error']) ?? 'cPanel file upload failed';
@@ -188,6 +202,44 @@ final class CpanelApiClient implements CpanelApiClientInterface
                 }
             }
         }
+    }
+
+    /** @param array<string, int> $expectedSizes */
+    private function uploadReportMatches(mixed $data, array $expectedSizes): bool
+    {
+        if (! \is_array($data) || ! \in_array($data['failed'] ?? null, [0, '0'], true)
+            || ! \in_array($data['succeeded'] ?? null, [\count($expectedSizes), (string) \count($expectedSizes)], true)
+            || ! \is_array($data['uploads'] ?? null) || ! \array_is_list($data['uploads'])
+            || \count($data['uploads']) !== \count($expectedSizes)) {
+            return false;
+        }
+
+        foreach (['error', 'errors'] as $key) {
+            if (\array_key_exists($key, $data) && ! \in_array($data[$key], [null, '', []], true)) {
+                return false;
+            }
+        }
+
+        $seen = [];
+        foreach ($data['uploads'] as $upload) {
+            if (! \is_array($upload) || ! \is_string($upload['file'] ?? null)
+                || ! \array_key_exists($upload['file'], $expectedSizes) || isset($seen[$upload['file']])
+                || ! \in_array($upload['status'] ?? null, [1, '1', true], true)) {
+                return false;
+            }
+            $size = $expectedSizes[$upload['file']];
+            if (! \in_array($upload['size'] ?? null, [$size, (string) $size], true)) {
+                return false;
+            }
+            foreach (['error', 'errors'] as $key) {
+                if (\array_key_exists($key, $upload) && ! \in_array($upload[$key], [null, '', []], true)) {
+                    return false;
+                }
+            }
+            $seen[$upload['file']] = true;
+        }
+
+        return true;
     }
 
     /**

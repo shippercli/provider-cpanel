@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   test:
-    name: PHP ${{ matrix.php }}
+    name: CI / PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -36,6 +36,9 @@ jobs:
 
       - name: Validate optimized autoloading
         run: composer dump-autoload --optimize --strict-psr
+
+      - name: Verify multipart upload reports over HTTP
+        run: python3 tests/http/test_upload_reports.py
 
       - name: Run tests
         run: composer test
