@@ -32,7 +32,10 @@ test('boolean and omitted password rotation options keep their intended behavior
     $client->responses["uapi:{$module}:list_databases"] = $client->success([['database' => 'shipper_app']]);
     $client->responses["uapi:{$module}:list_users"] = $client->success([['user' => 'shipper_app']]);
     $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
-    $database = ['name' => 'app', 'user' => 'app', 'type' => $type, 'password' => 'configured-secret'];
+    $database = [
+        'name' => 'app', 'user' => 'app', 'type' => $type,
+        'password' => 'configured-secret', 'adopt_existing' => true,
+    ];
     if ($flag !== 'omitted') {
         $database['update_password'] = $flag;
     }

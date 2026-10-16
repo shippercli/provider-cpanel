@@ -1229,7 +1229,8 @@ test('existing postgresql user password updates require explicit opt in', functi
         'runtime' => ['type' => 'static'],
         'databases' => ['main' => [
             'type' => 'postgresql', 'name' => 'app', 'user' => 'app',
-            'password' => 'replacement-secret', 'update_password' => $updatePassword,
+            'password' => 'replacement-secret', 'adopt_existing' => true,
+            'update_password' => $updatePassword,
         ]],
         'cpanel' => ['archive_extraction' => 'direct'],
     ]);
@@ -1257,7 +1258,8 @@ test('failed postgresql password update stops before privileges and file deploym
         'runtime' => ['type' => 'static'],
         'databases' => ['main' => [
             'type' => 'postgresql', 'name' => 'app', 'user' => 'app',
-            'password' => 'replacement-secret', 'update_password' => true,
+            'password' => 'replacement-secret', 'adopt_existing' => true,
+            'update_password' => true,
         ]],
         'cpanel' => ['archive_extraction' => 'direct'],
     ]);
