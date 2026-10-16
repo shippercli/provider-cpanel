@@ -27,3 +27,26 @@ can exceed that window to preserve protected files. The selected-archive pin
 applies only to the current rollback; a new backup is always protected during
 its own retention pass. Protection does not prevent concurrent deletion or
 changes by another process.
+
+## Confirmed external-link restoration gap
+
+The readability check is insufficient to establish archive safety. A local
+reproduction with bsdtar 3.5.3/libarchive 3.7.4 created an ordinary gzip tar
+containing `public-link.txt`, a symlink to a synthetic private file outside the
+source directory. Both `tar -tzf` and `tar -xzf ... -C restore` returned zero.
+The restored link remained a symlink and read the outside file's contents.
+The outside file itself was unchanged. All files were in a temporary directory;
+no live account or real secret was accessed.
+
+This archive can also be produced by the provider's existing backup command,
+which preserves symlinks. Inventory checks on the archive file and successful
+tar listing do not constrain archive members or link destinations. Whether a
+restored link becomes publicly readable depends on the live server's document
+root and symlink policy; that exposure has not been tested.
+
+Rollback must remain under review until member types, paths, and link targets
+are checked before clearing the current deployment, and extraction is verified
+to remain within its intended directory. A complete solution also needs tests
+for legitimate in-tree links, absolute and relative escaping links, hardlinks,
+duplicate/overlapping entries, and changes between inspection and extraction.
+Do not describe the current readability check as safe archive validation.
