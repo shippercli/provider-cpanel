@@ -72,11 +72,21 @@ databases:
     user: app_production
     password: "${DB_PASSWORD}"
     privileges: ALL PRIVILEGES
+    adopt_existing: false
+    update_password: false
 ```
 
 `mysql` and `postgresql` are supported. cPanel may prefix database and user
 names with the account username. Shipper injects the resolved names into the
-deployment environment.
+deployment environment. Plan blocks an existing database unless its exact
+profile declaration sets `adopt_existing: true`; the plan then names the
+database being adopted. Apply rechecks this before hooks or resource mutations.
+The manifest persists whether Shipper created or adopted each database. A
+previously adopted database remains reusable on later applies and is preserved
+by destroy. Only databases recorded as created by Shipper are eligible for
+database deletion. Existing database user passwords change only when
+`update_password: true` is explicitly set; both consent options must be actual
+booleans.
 
 ## Releases
 

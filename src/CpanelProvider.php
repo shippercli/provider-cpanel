@@ -133,6 +133,12 @@ final class CpanelProvider implements
             if (($database['user'] ?? '') !== '' && ($database['password'] ?? '') === '') {
                 $errors[] = "Database password is required for cPanel database user: {$database['user']}";
             }
+            if (array_key_exists('adopt_existing', $database) && ! is_bool($database['adopt_existing'])) {
+                $errors[] = "cPanel database adopt_existing must be a boolean: {$database['name']}";
+            }
+            if (array_key_exists('update_password', $database) && ! is_bool($database['update_password'])) {
+                $errors[] = "cPanel database update_password must be a boolean: {$database['name']}";
+            }
         }
 
         $accountResources = $this->accountResourceConfigs($project, $profile);
@@ -175,7 +181,17 @@ final class CpanelProvider implements
         $accountResources = $this->accountResourceConfigs($project, $profile);
         $blocked = null;
         $domainDisposition = 'new';
+        $databaseDispositions = [];
+        foreach ($this->databaseConfigs($project, $profile) as $database) {
+            if (! is_bool($database['adopt_existing']) || ! is_bool($database['update_password'])) {
+                $blocked = 'cPanel database adoption and password-update options must be booleans.';
+                break;
+            }
+        }
         try {
+            if ($blocked !== null) {
+                throw new RuntimeException($blocked);
+            }
             $manifest = $this->readManifest($profile);
             if ($manifest !== null && ! $this->manifestMatches($manifest, $project, $profile)) {
                 $blocked = 'The cPanel Shipper manifest belongs to another deployment.';
@@ -194,8 +210,13 @@ final class CpanelProvider implements
                 }
                 $domainDisposition = $existingDomain ? 'adopt' : 'new';
             }
-        } catch (\Throwable) {
-            $blocked = 'Unable to verify cPanel deployment ownership. Review the manifest and API access before deployment.';
+            if ($blocked === null) {
+                $databaseDispositions = $this->inspectDatabaseAdoptionPlan($project, $profile, $manifest);
+            }
+        } catch (\Throwable $exception) {
+            $blocked = str_contains($exception->getMessage(), 'requires adopt_existing: true')
+                ? $exception->getMessage()
+                : 'Unable to verify cPanel deployment ownership. Review the manifest and API access before deployment.';
         }
         $actions = [
             'Discover enabled cPanel account features',
@@ -234,8 +255,13 @@ final class CpanelProvider implements
             $actions[] = "Register or update {$runtime['type']} Passenger application";
         }
 
-        foreach ($this->databaseConfigs($project, $profile) as $database) {
-            $actions[] = "Create or find {$database['type']} database: {$database['name']}";
+        foreach ($databaseDispositions as $disposition) {
+            $actions[] = match ($disposition['action']) {
+                'adopt' => "Adopt existing {$disposition['type']} database: {$disposition['name']}",
+                'adopted' => "Reuse previously adopted {$disposition['type']} database: {$disposition['name']}",
+                'created' => "Reuse Shipper-created {$disposition['type']} database: {$disposition['name']}",
+                default => "Create {$disposition['type']} database: {$disposition['name']}",
+            };
         }
 
         $environment = $this->environmentVariables($project, $profile);
@@ -300,6 +326,10 @@ final class CpanelProvider implements
         $this->lastError = '';
 
         try {
+            $validationErrors = $this->validate($project, $profile);
+            if ($validationErrors !== []) {
+                throw new RuntimeException(implode('; ', $validationErrors));
+            }
             $context = $this->context($project, $profile);
             $previousManifest = $this->readManifest($profile);
             if ($previousManifest !== null && ! $this->manifestMatches($previousManifest, $project, $profile)) {
@@ -307,6 +337,10 @@ final class CpanelProvider implements
                     'Refusing cPanel apply because the Shipper manifest belongs to another deployment',
                 );
             }
+
+            // Database adoption is resolved before hooks, domain reconciliation,
+            // uploads, or any other provider mutation.
+            $this->inspectDatabaseAdoptionPlan($project, $profile, $previousManifest);
 
             $domainInventory = null;
             if ($previousManifest === null) {
@@ -331,7 +365,7 @@ final class CpanelProvider implements
             $runtime = $this->runtimeConfig($project, $profile);
 
             $this->configurePhp($domainState['domain'], $runtime, $profile);
-            $databaseState = $this->ensureDatabases($project, $profile);
+            $databaseState = $this->ensureDatabases($project, $profile, $previousManifest);
             $databaseState['resources'] = $this->preserveDatabaseOwnership(
                 $databaseState['resources'],
                 $previousManifest['databases'] ?? null,
@@ -918,9 +952,10 @@ final class CpanelProvider implements
     }
 
     /**
+     * @param array<string, mixed>|null $previousManifest
      * @return array{resources: array<int, array<string, mixed>>, environment: array<string, string>}
      */
-    private function ensureDatabases(object $project, object $profile): array
+    private function ensureDatabases(object $project, object $profile, ?array $previousManifest = null): array
     {
         $resources = [];
         $environment = [];
@@ -933,6 +968,7 @@ final class CpanelProvider implements
 
             if ($type === 'mysql') {
                 $databaseExisted = $this->mysqlDatabaseExists($name);
+                $ownershipState = $this->resolveDatabaseOwnershipState($database, $type, $name, $databaseExisted, $previousManifest);
                 if (! $databaseExisted) {
                     $this->required(
                         $this->api()->uapi('Mysql', 'create_database', ['name' => $name]),
@@ -941,6 +977,9 @@ final class CpanelProvider implements
                 }
 
                 $userExisted = $user === '' ? true : $this->mysqlUserExists($user);
+                if ($databaseExisted && $user !== '' && ! $userExisted && $ownershipState === null) {
+                    throw new RuntimeException("Refusing to create a user for existing MySQL database {$name} without explicit adoption consent.");
+                }
                 if ($user !== '' && ! $userExisted) {
                     $this->required($this->api()->uapi('Mysql', 'create_user', [
                         'name' => $user,
@@ -953,7 +992,7 @@ final class CpanelProvider implements
                     ]), "Update MySQL user {$user}");
                 }
 
-                if ($user !== '') {
+                if ($user !== '' && $ownershipState !== null) {
                     $this->required($this->api()->uapi('Mysql', 'set_privileges_on_database', [
                         'user' => $user,
                         'database' => $name,
@@ -962,6 +1001,7 @@ final class CpanelProvider implements
                 }
             } elseif ($type === 'postgresql') {
                 $databaseExisted = $this->postgresDatabaseExists($name);
+                $ownershipState = $this->resolveDatabaseOwnershipState($database, $type, $name, $databaseExisted, $previousManifest);
                 if (! $databaseExisted) {
                     $this->required(
                         $this->api()->uapi('Postgresql', 'create_database', ['name' => $name]),
@@ -970,6 +1010,9 @@ final class CpanelProvider implements
                 }
 
                 $userExisted = $user === '' ? true : $this->postgresUserExists($user);
+                if ($databaseExisted && $user !== '' && ! $userExisted && $ownershipState === null) {
+                    throw new RuntimeException("Refusing to create a user for existing PostgreSQL database {$name} without explicit adoption consent.");
+                }
                 if ($user !== '' && ! $userExisted) {
                     $this->required($this->api()->uapi('Postgresql', 'create_user', [
                         'name' => $user,
@@ -977,7 +1020,7 @@ final class CpanelProvider implements
                     ]), "Create PostgreSQL user {$user}");
                 }
 
-                if ($user !== '') {
+                if ($user !== '' && $ownershipState !== null) {
                     $this->required($this->api()->uapi('Postgresql', 'grant_all_privileges', [
                         'user' => $user,
                         'database' => $name,
@@ -992,6 +1035,7 @@ final class CpanelProvider implements
                 'name' => $name,
                 'user' => $user,
                 'database_created' => ! $databaseExisted,
+                'database_ownership_state' => $ownershipState,
                 'user_created' => ! $userExisted,
             ];
 
@@ -2618,7 +2662,7 @@ final class CpanelProvider implements
     }
 
     /**
-     * @return array<int, array{name: string, user: string, type: string, password: string, privileges: string, update_password?: bool}>
+     * @return array<int, array{name: string, user: string, type: string, password: string, privileges: string, adopt_existing: mixed, update_password: mixed}>
      */
     private function databaseConfigs(object $project, object $profile): array
     {
@@ -2637,7 +2681,8 @@ final class CpanelProvider implements
                     'type' => \strtolower($this->arrayString($database, 'type', 'mysql')),
                     'password' => $this->arrayString($database, 'password', $this->stringConfig('database_password')),
                     'privileges' => $this->privilegeString($database['privileges'] ?? 'ALL PRIVILEGES'),
-                    'update_password' => (bool) ($database['update_password'] ?? false),
+                    'adopt_existing' => $database['adopt_existing'] ?? false,
+                    'update_password' => $database['update_password'] ?? false,
                 ];
             }
 
@@ -2660,6 +2705,8 @@ final class CpanelProvider implements
                 'type' => \strtolower($this->objectMethodString($database, 'type', 'mysql')),
                 'password' => $this->stringConfig('database_password'),
                 'privileges' => 'ALL PRIVILEGES',
+                'adopt_existing' => false,
+                'update_password' => false,
             ];
         }
 
@@ -3119,6 +3166,57 @@ final class CpanelProvider implements
 
         return $this->containsValueAtKey($data, 'user', $name)
             || $this->containsValueAtKey($data, 'name', $name);
+    }
+
+    /**
+     * @param array<string, mixed>|null $manifest
+     * @return array<int, array{type: string, name: string, action: string, ownership_state: string}>
+     */
+    private function inspectDatabaseAdoptionPlan(object $project, object $profile, ?array $manifest): array
+    {
+        $dispositions = [];
+        foreach ($this->databaseConfigs($project, $profile) as $database) {
+            $type = $database['type'];
+            $name = $this->qualifiedDatabaseName($database['name']);
+            $exists = match ($type) {
+                'mysql' => $this->mysqlDatabaseExists($name),
+                'postgresql' => $this->postgresDatabaseExists($name),
+                default => throw new RuntimeException("Unsupported cPanel database type: {$type}"),
+            };
+            $previousState = $this->recordedDatabaseOwnershipState($manifest, $type, $name);
+            $state = $this->resolveDatabaseOwnershipState($database, $type, $name, $exists, $manifest);
+            $action = ! $exists ? 'create' : match ($previousState) {
+                'created' => 'created',
+                'adopted' => 'adopted',
+                default => 'adopt',
+            };
+            $dispositions[] = ['type' => $type, 'name' => $name, 'action' => $action, 'ownership_state' => $state];
+        }
+        return $dispositions;
+    }
+
+    /** @param array<string, mixed>|null $manifest */
+    private function resolveDatabaseOwnershipState(array $database, string $type, string $name, bool $exists, ?array $manifest): ?string
+    {
+        if (! $exists) return 'created';
+        $recorded = $this->recordedDatabaseOwnershipState($manifest, $type, $name);
+        if ($recorded !== null) return $recorded;
+        if ($database['adopt_existing'] === true) return 'adopted';
+        throw new RuntimeException("Existing cPanel database {$name} requires adopt_existing: true for this project and profile.");
+    }
+
+    /** @param array<string, mixed>|null $manifest */
+    private function recordedDatabaseOwnershipState(?array $manifest, string $type, string $name): ?string
+    {
+        $databases = $manifest['databases'] ?? null;
+        if (! is_array($databases)) return null;
+        foreach ($databases as $database) {
+            if (! is_array($database) || ($database['type'] ?? null) !== $type || ($database['name'] ?? null) !== $name) continue;
+            $state = $database['database_ownership_state'] ?? null;
+            if ($state === 'created' || $state === 'adopted') return $state;
+            if (($database['database_created'] ?? null) === true) return 'created';
+        }
+        return null;
     }
 
     /**
