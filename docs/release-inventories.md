@@ -105,3 +105,25 @@ Do not delete staging after an uncertain result. Cross-filesystem rename is
 unsupported; failures preserve or attempt to restore the previous deployment.
 Trusted parent directories and exclusion of concurrent deployment processes
 remain caller requirements. Production rollback integration is still pending.
+
+### Scoped restore entry point
+
+`--restore ARCHIVE STAGE ACTIVE HOME PROJECT PROFILE DOMAIN` combines staging
+and promotion. It checks canonical absolute account paths and rejects symlink
+ancestors, archives outside HOME, staging within ACTIVE, account-root/public_html
+restoration, and non-ordinary archive files. A persistent no-follow lock inode
+under HOME prevents competing executions of this restore helper; lock contention
+fails before staging. The lock file is intentionally retained to avoid an
+unlink/recreate race.
+
+The entry point checks both the current and archived `.shipper-manifest.json`
+for matching project, profile, domain, and deployment path. A foreign archive or
+changed live identity stops before moving the active tree. Archived identity
+failure retains the private staged copy for review. This is consistency checking
+of account-held manifests, not cryptographic authentication.
+
+Apply and destroy do not yet acquire this restore lock. Production PHP rollback
+still does not invoke the entry point. Remote runtime setup and command delivery,
+shared mutation locking, crash recovery and cleanup orchestration remain open.
+The Python helper currently requires a POSIX Python 3 runtime with `fcntl` and
+`O_NOFOLLOW`; its availability must be checked before enabling remote use.

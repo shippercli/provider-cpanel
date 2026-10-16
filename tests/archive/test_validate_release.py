@@ -1,5 +1,8 @@
 import importlib.util
 import io
+import json
+import fcntl
+import hashlib
 from pathlib import Path
 import tarfile
 import tempfile
@@ -252,6 +255,80 @@ class ReleasePromotionTest(unittest.TestCase):
             with self.assertRaises(validator.InvalidRelease):
                 validator.promote_release(stage, alias)
             self.assertEqual((active / 'old.txt').read_text(), 'old release')
+
+
+class RestoreEntryPointTest(unittest.TestCase):
+    def prepare(self, root, archive_project='sample'):
+        home = root / 'home'
+        home.mkdir()
+        active = home / 'app'
+        active.mkdir()
+        manifest = {'project': 'sample', 'profile': 'production',
+                    'domain': {'domain': 'app.example.com'}, 'deploy_path': '/app'}
+        (active / '.shipper-manifest.json').write_text(json.dumps(manifest))
+        (active / 'old.txt').write_text('old release')
+        archive = home / 'release.tar.gz'
+        manifest['project'] = archive_project
+        with tarfile.open(archive, 'w:gz') as output:
+            for name, content in [('index.txt', 'new release'),
+                                  ('.shipper-manifest.json', json.dumps(manifest))]:
+                data = content.encode()
+                member = tarfile.TarInfo(name)
+                member.size = len(data)
+                output.addfile(member, io.BytesIO(data))
+        return home, active, archive, home / 'stage'
+
+    def restore(self, home, active, archive, stage):
+        validator.restore_release(archive, stage, active, home, 'sample', 'production', 'app.example.com')
+
+    def test_matching_release_restores_and_retains_previous(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, active, archive, stage = self.prepare(Path(directory).resolve())
+            self.restore(home, active, archive, stage)
+            self.assertEqual((active / 'index.txt').read_text(), 'new release')
+            self.assertEqual((stage / 'previous/old.txt').read_text(), 'old release')
+
+    def test_foreign_archive_identity_does_not_move_active_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, active, archive, stage = self.prepare(Path(directory).resolve(), 'other-project')
+            with self.assertRaises(validator.InvalidRelease):
+                self.restore(home, active, archive, stage)
+            self.assertEqual((active / 'old.txt').read_text(), 'old release')
+            self.assertFalse((stage / 'previous').exists())
+
+    def test_symlink_ancestor_stops_before_staging(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            home, active, archive, stage = self.prepare(root)
+            alias = root / 'alias'
+            alias.symlink_to(home)
+            with self.assertRaises(validator.InvalidRelease):
+                self.restore(alias, alias / 'app', alias / 'release.tar.gz', alias / 'stage')
+            self.assertEqual((active / 'old.txt').read_text(), 'old release')
+            self.assertFalse(stage.exists())
+
+    def test_competing_restore_lock_stops_before_staging(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, active, archive, stage = self.prepare(Path(directory).resolve())
+            name = '.shipper-rollback-' + hashlib.sha256(str(active).encode()).hexdigest() + '.lock'
+            with open(home / name, 'w') as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with self.assertRaises(BlockingIOError):
+                    self.restore(home, active, archive, stage)
+            self.assertEqual((active / 'old.txt').read_text(), 'old release')
+            self.assertFalse(stage.exists())
+
+    def test_changed_live_identity_stops_before_staging(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home, active, archive, stage = self.prepare(Path(directory).resolve())
+            path = active / '.shipper-manifest.json'
+            manifest = json.loads(path.read_text())
+            manifest['domain']['domain'] = 'other.example.com'
+            path.write_text(json.dumps(manifest))
+            with self.assertRaises(validator.InvalidRelease):
+                self.restore(home, active, archive, stage)
+            self.assertEqual((active / 'old.txt').read_text(), 'old release')
+            self.assertFalse(stage.exists())
 
 
 if __name__ == '__main__':

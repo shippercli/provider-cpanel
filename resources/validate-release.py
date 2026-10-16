@@ -5,6 +5,9 @@ Not yet wired into remote rollback. The caller must supply a trusted staging
 parent and restore the completed tree without traversing existing target links.
 """
 import gzip
+import fcntl
+import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -253,20 +256,93 @@ def promote_release(destination, active):
         raise
 
 
+def trusted_path(value, directory=True):
+    value = str(value)
+    if not value.startswith('/') or any(part in ('.', '..') for part in value.split('/')):
+        raise InvalidRelease('path must be canonical and absolute')
+    path = Path(value)
+    current = Path('/')
+    for part in path.parts[1:]:
+        current = current / part
+        info = current.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            raise InvalidRelease('symlink path ancestry is unsupported')
+        if current != path or directory:
+            if not stat.S_ISDIR(info.st_mode):
+                raise InvalidRelease('path ancestry is not a directory')
+        elif not stat.S_ISREG(info.st_mode):
+            raise InvalidRelease('archive must be an ordinary file')
+    return path
+
+
+def verify_identity(tree, home, active, project, profile, domain):
+    path = tree / '.shipper-manifest.json'
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size > 1024 * 1024:
+        raise InvalidRelease('invalid release identity file')
+    with open(str(path), 'r', encoding='utf-8') as stream:
+        manifest = json.load(stream)
+    if not isinstance(manifest, dict):
+        raise InvalidRelease('invalid release identity')
+    target = manifest.get('domain')
+    if (manifest.get('project') != project or manifest.get('profile') != profile
+            or not isinstance(target, dict) or target.get('domain') != domain):
+        raise InvalidRelease('release identity does not match deployment')
+    deployment = manifest.get('deploy_path')
+    if not isinstance(deployment, str) or not deployment.startswith('/'):
+        raise InvalidRelease('invalid release deployment path')
+    if any(part in ('.', '..') for part in deployment.split('/')):
+        raise InvalidRelease('invalid release deployment path')
+    candidate = Path(deployment)
+    if candidate != home and home not in candidate.parents:
+        candidate = home / deployment.lstrip('/')
+    if candidate != active:
+        raise InvalidRelease('release path does not match deployment')
+
+
+def restore_release(archive, destination, active, home, project, profile, domain):
+    home = trusted_path(home)
+    active = trusted_path(active)
+    archive = trusted_path(archive, directory=False)
+    destination = Path(destination)
+    parent = trusted_path(destination.parent)
+    if (home == Path('/') or home not in active.parents or active == home / 'public_html'
+            or home not in archive.parents or (parent != home and home not in parent.parents)):
+        raise InvalidRelease('restore paths are outside managed account scope')
+    if active == parent or active in parent.parents:
+        raise InvalidRelease('staging cannot be inside the deployment')
+    # Persistent inode: never unlink a lock file, which would permit two lockers.
+    lock_name = '.shipper-rollback-' + hashlib.sha256(str(active).encode()).hexdigest() + '.lock'
+    descriptor = os.open(str(home / lock_name), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise InvalidRelease('restore lock is not an ordinary file')
+    with os.fdopen(descriptor, 'r+') as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        verify_identity(active, home, active, project, profile, domain)
+        stage_release(archive, destination)
+        verify_identity(destination / 'tree', home, active, project, profile, domain)
+        promote_release(destination, active)
+
+
 def main():
+    restore = len(sys.argv) == 9 and sys.argv[1] == '--restore'
     promote = len(sys.argv) == 4 and sys.argv[1] == '--promote'
     stage = len(sys.argv) == 4 and sys.argv[2] == '--stage'
-    if len(sys.argv) != 2 and not promote and not stage:
+    if len(sys.argv) != 2 and not promote and not stage and not restore:
         print('Usage: validate-release.py ARCHIVE [--stage NEW_DIRECTORY] | --promote STAGE ACTIVE', file=sys.stderr)
         return 2
     try:
-        if promote:
+        if restore:
+            restore_release(*sys.argv[2:])
+            print('Restored release; previous deployment retained')
+        elif promote:
             promote_release(sys.argv[2], sys.argv[3])
             print('Promoted staged release; previous deployment retained')
         else:
             count = stage_release(sys.argv[1], sys.argv[3]) if stage else inspect_release(sys.argv[1])
             print('Validated {} archive members'.format(count))
-    except (InvalidRelease, OSError, EOFError, tarfile.TarError):
+    except (ValueError, OSError, EOFError, tarfile.TarError, UnicodeError):
         # Do not echo attacker-controlled archive names or file contents.
         print('Release operation failed; inspect staging and previous deployment before retrying', file=sys.stderr)
         return 1
