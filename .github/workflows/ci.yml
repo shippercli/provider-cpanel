@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   test:
-    name: PHP ${{ matrix.php }}
+    name: CI / PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -42,3 +42,6 @@ jobs:
 
       - name: Audit dependencies
         run: composer audit --locked --no-interaction
+
+      - name: Verify authenticated redirect rejection over HTTP
+        run: python3 tests/http/test_redirects.py
