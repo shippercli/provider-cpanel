@@ -42,7 +42,11 @@ test('environment file delivery is read back before apply continues', function (
     ]);
     $client->readBackUploadedFiles = false;
     $client->responseQueues['uapi:Fileman:get_file_content'] = [
-        $client->success(['content' => 'old manifest']),
+        $client->success(['content' => json_encode([
+            'project' => 'sample',
+            'profile' => 'production',
+            'domain' => ['domain' => 'app.example.com', 'created' => true],
+        ], JSON_THROW_ON_ERROR)]),
         $client->success(['content' => 'DB_PASSWORD="main-secret"']),
     ];
 
