@@ -38,5 +38,19 @@
         "sort-packages": true
     },
     "minimum-stability": "stable",
-    "prefer-stable": true
+    "prefer-stable": true,
+    "archive": {
+        "exclude": [
+            "vendor",
+            "node_modules",
+            "tests",
+            ".github",
+            ".env*",
+            "auth.json",
+            "builds",
+            "box.phar",
+            ".phpunit*",
+            ".phpstan*"
+        ]
+    }
 }

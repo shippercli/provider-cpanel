@@ -795,7 +795,7 @@ test('destroy removes only resources recorded as created in the shipper manifest
         'content' => \json_encode($manifest, JSON_THROW_ON_ERROR),
     ]);
     $client->responses['uapi:Fileman:list_files'] = $client->success([
-        ['file' => '20260727010101-deadbeef.tar.gz'],
+        ['file' => '20260727010101-deadbeef.tar.gz', 'type' => 'file'],
     ]);
     $provider = new CpanelProvider([
         'host' => 'cpanel.example.com',
@@ -1090,9 +1090,10 @@ test('rollback restores a selected managed release archive', function (): void {
     $client->responseQueues['uapi:Fileman:get_file_content'] = [
         $client->success(['content' => \json_encode($manifest, JSON_THROW_ON_ERROR)]),
         $client->success(['content' => "0\n"]),
+        $client->success(['content' => "0\n"]),
     ];
     $client->responses['uapi:Fileman:list_files'] = $client->success([
-        ['file' => $release],
+        ['file' => $release, 'type' => 'file'],
     ]);
     $client->responses['api2:Cron:add_line'] = $client->success([['linekey' => '92']]);
 
@@ -1107,7 +1108,7 @@ test('rollback restores a selected managed release archive', function (): void {
 
     $restoreTask = cpanelProviderCalls($client, 'api2', 'Cron', 'add_line')[0];
     expect($restoreTask['parameters']['command'])
-        ->toContain(' -xzf ')
+        ->toContain('--restore')
         ->toContain('/.shipper/releases/sample/production/'.$release);
 });
 
@@ -1143,7 +1144,7 @@ test('status reports manifest deployment resource usage and releases', function 
         ['task_id' => 'current-task', 'deploy_id' => 2, 'state' => 'succeeded'],
     ]);
     $client->responses['uapi:Fileman:list_files'] = $client->success([
-        ['file' => '20260727010101-deadbeef.tar.gz'],
+        ['file' => '20260727010101-deadbeef.tar.gz', 'type' => 'file'],
     ]);
 
     $status = $provider->status(
