@@ -1219,6 +1219,57 @@ test('python and ruby applications install passenger dependencies', function (
     'Ruby and gem' => ['ruby', 'gem'],
 ]);
 
+test('existing postgresql user password updates require explicit opt in', function (bool $updatePassword): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:Postgresql:list_databases'] = $client->success([['database' => 'shipper_app']]);
+    $client->responses['uapi:Postgresql:list_users'] = $client->success([['user' => 'shipper_app']]);
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $profile = new CpanelTestProfile([
+        'domain' => 'app.example.com', 'deploy_path' => '/app',
+        'runtime' => ['type' => 'static'],
+        'databases' => ['main' => [
+            'type' => 'postgresql', 'name' => 'app', 'user' => 'app',
+            'password' => 'replacement-secret', 'adopt_existing' => true,
+            'update_password' => $updatePassword,
+        ]],
+        'cpanel' => ['archive_extraction' => 'direct'],
+    ]);
+
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeTrue()
+        ->and(cpanelProviderCalls($client, 'uapi', 'Postgresql', 'create_user'))->toBeEmpty()
+        ->and(cpanelProviderCalls($client, 'uapi', 'Postgresql', 'create_database'))->toBeEmpty();
+    $updates = cpanelProviderCalls($client, 'uapi', 'Postgresql', 'set_password');
+    expect($updates)->toHaveCount($updatePassword ? 1 : 0);
+    if ($updatePassword) {
+        expect($updates[0]['parameters'])->toBe(['user' => 'shipper_app', 'password' => 'replacement-secret']);
+    }
+})->with([true, false]);
+
+test('failed postgresql password update stops before privileges and file deployment', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:Postgresql:list_databases'] = $client->success([['database' => 'shipper_app']]);
+    $client->responses['uapi:Postgresql:list_users'] = $client->success([['user' => 'shipper_app']]);
+    $client->responses['uapi:Postgresql:set_password'] = [
+        'success' => false, 'message' => 'Password update refused', 'data' => null, 'raw' => [],
+    ];
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $profile = new CpanelTestProfile([
+        'domain' => 'app.example.com', 'deploy_path' => '/app',
+        'runtime' => ['type' => 'static'],
+        'databases' => ['main' => [
+            'type' => 'postgresql', 'name' => 'app', 'user' => 'app',
+            'password' => 'replacement-secret', 'adopt_existing' => true,
+            'update_password' => true,
+        ]],
+        'cpanel' => ['archive_extraction' => 'direct'],
+    ]);
+
+    expect($provider->apply(new CpanelTestProject(cpanelProviderFixture()), $profile))->toBeFalse()
+        ->and($provider->getLastError())->toBe('Update PostgreSQL user shipper_app failed: Password update refused')
+        ->and(cpanelProviderCalls($client, 'uapi', 'Postgresql', 'grant_all_privileges'))->toBeEmpty()
+        ->and($client->uploadedFiles)->toBeEmpty();
+});
+
 test('postgresql databases users and privileges use the cpanel postgresql API', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [
@@ -1244,6 +1295,7 @@ test('postgresql databases users and privileges use the cpanel postgresql API', 
     ))->toBeTrue()
         ->and(cpanelProviderCalls($client, 'uapi', 'Postgresql', 'create_database'))->toHaveCount(1)
         ->and(cpanelProviderCalls($client, 'uapi', 'Postgresql', 'create_user'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'uapi', 'Postgresql', 'set_password'))->toBeEmpty()
         ->and(cpanelProviderCalls($client, 'uapi', 'Postgresql', 'grant_all_privileges'))->toHaveCount(1)
         ->and($client->uploadedFiles['.env'])->toContain(
             'DB_CONNECTION="pgsql"',

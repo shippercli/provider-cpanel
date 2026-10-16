@@ -11,6 +11,23 @@ composer require shippercli/provider-cpanel
 Shipper discovers the provider through Composer's plugin metadata. No cPanel
 implementation is bundled into the CLI.
 
+## Existing database user passwords
+
+Profile database entries may set `update_password: true` to rotate an existing
+MySQL or PostgreSQL user's password before privileges and application deployment.
+Use an unquoted YAML boolean; strings, numbers, null, and other types are rejected
+by validation, planning, and direct apply before API calls. If cPanel refuses
+that update, apply fails. The default is false: existing user
+passwords are left unchanged, so the configured password must already be correct.
+This option affects the account-level database user and every application using
+that user; coordinate rotations of shared credentials. Newly created users get
+the configured password through `create_user`.
+
+PostgreSQL updates use cPanel's documented
+[`Postgresql/set_password`](https://api.docs.cpanel.net/specifications/cpanel.openapi/postgresql-user-management).
+Offline tests check request parameters and failure behavior; a live database
+connection is still needed to verify the resulting credentials.
+
 ## Configure
 
 Use a cPanel API token when the hosting provider allows one. Password

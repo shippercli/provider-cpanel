@@ -98,6 +98,12 @@ final class CpanelProvider implements
             $errors[] = 'cPanel password or API token is required';
         }
 
+        try {
+            $this->assertDatabasePasswordOptions($profile);
+        } catch (RuntimeException $exception) {
+            $errors[] = $exception->getMessage();
+        }
+
         if ($this->projectPath($project) === '') {
             $errors[] = 'Project path is required';
         }
@@ -168,6 +174,7 @@ final class CpanelProvider implements
         $domain = $this->domain($profile);
         $method = $this->deploymentMethod($project, $profile);
         $runtime = $this->runtimeConfig($project, $profile);
+        $this->assertDatabasePasswordOptions($profile);
         $accountResources = $this->accountResourceConfigs($project, $profile);
         $actions = [
             'Discover enabled cPanel account features',
@@ -265,6 +272,7 @@ final class CpanelProvider implements
 
         try {
             $context = $this->context($project, $profile);
+            $this->assertDatabasePasswordOptions($profile);
             $previousManifest = $this->readManifest($profile);
             if ($previousManifest !== null && ! $this->manifestMatches($previousManifest, $project, $profile)) {
                 throw new RuntimeException(
@@ -926,6 +934,11 @@ final class CpanelProvider implements
                         'name' => $user,
                         'password' => $password,
                     ]), "Create PostgreSQL user {$user}");
+                } elseif ($user !== '' && $password !== '' && $this->boolDatabaseOption($database, 'update_password', false)) {
+                    $this->required($this->api()->uapi('Postgresql', 'set_password', [
+                        'user' => $user,
+                        'password' => $password,
+                    ]), "Update PostgreSQL user {$user}");
                 }
 
                 if ($user !== '') {
@@ -2507,6 +2520,21 @@ final class CpanelProvider implements
         ];
     }
 
+    private function assertDatabasePasswordOptions(object $profile): void
+    {
+        $databases = $this->profileValue($profile, 'databases');
+        if (! \is_array($databases)) {
+            return;
+        }
+
+        foreach ($databases as $database) {
+            if (\is_array($database) && \array_key_exists('update_password', $database)
+                && ! \is_bool($database['update_password'])) {
+                throw new RuntimeException('Database update_password must be a boolean');
+            }
+        }
+    }
+
     /**
      * @return array<int, array{name: string, user: string, type: string, password: string, privileges: string, update_password?: bool}>
      */
@@ -2527,7 +2555,7 @@ final class CpanelProvider implements
                     'type' => \strtolower($this->arrayString($database, 'type', 'mysql')),
                     'password' => $this->arrayString($database, 'password', $this->stringConfig('database_password')),
                     'privileges' => $this->privilegeString($database['privileges'] ?? 'ALL PRIVILEGES'),
-                    'update_password' => (bool) ($database['update_password'] ?? false),
+                    'update_password' => ($database['update_password'] ?? false) === true,
                 ];
             }
 
