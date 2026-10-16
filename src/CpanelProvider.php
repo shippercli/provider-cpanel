@@ -3008,21 +3008,50 @@ final class CpanelProvider implements
             return $this->homeDirectory;
         }
 
-        $configured = $this->stringConfig('home_directory');
+        $configured = \array_key_exists('home_directory', $this->config) ? $this->config['home_directory'] : '';
+        if (! \is_string($configured)) {
+            throw new RuntimeException('cPanel home_directory must be a string');
+        }
         if ($configured !== '') {
-            return $this->homeDirectory = \rtrim($configured, '/');
+            return $this->homeDirectory = $this->validatedHomeDirectory($configured);
         }
 
         $result = $this->api()->uapi('Variables', 'get_user_information');
-        if ($result['success']) {
-            $home = $this->findValueAtKey($result['data'], 'home')
-                ?? $this->findValueAtKey($result['data'], 'homedir');
-            if (\is_string($home) && $home !== '') {
-                return $this->homeDirectory = \rtrim($home, '/');
+        $data = $result['data'];
+        if (! $result['success'] || ! \is_array($data)) {
+            throw new RuntimeException('Unable to resolve the cPanel account home directory; refusing to guess its path');
+        }
+        $homes = [];
+        foreach (['home', 'homedir'] as $key) {
+            if (\array_key_exists($key, $data)) {
+                $homes[] = $this->validatedHomeDirectory($data[$key]);
+            }
+        }
+        if ($homes === [] || \count(\array_unique($homes)) !== 1) {
+            throw new RuntimeException('The cPanel account home directory is missing or ambiguous');
+        }
+
+        return $this->homeDirectory = $homes[0];
+    }
+
+    private function validatedHomeDirectory(mixed $home): string
+    {
+        if (! \is_string($home) || $home === '' || $home !== \trim($home)
+            || ! \str_starts_with($home, '/')
+            || \preg_match('/[\x00-\x1f\x7f\\\\,%]/', $home) === 1) {
+            throw new RuntimeException('Invalid cPanel account home directory');
+        }
+        $home = \rtrim($home, '/');
+        if ($home === '' || \str_contains($home, '//')) {
+            throw new RuntimeException('Invalid cPanel account home directory');
+        }
+        foreach (\explode('/', $home) as $segment) {
+            if ($segment === '.' || $segment === '..') {
+                throw new RuntimeException('Invalid cPanel account home directory');
             }
         }
 
-        return $this->homeDirectory = '/home/'.$this->stringConfig('username');
+        return $home;
     }
 
     private function absolutePath(string $path): string
