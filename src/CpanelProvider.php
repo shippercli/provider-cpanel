@@ -180,6 +180,7 @@ final class CpanelProvider implements
                 $blocked = 'The cPanel Shipper manifest belongs to another deployment.';
             } elseif ($manifest === null) {
                 $inventory = $this->required($this->api()->uapi('DomainInfo', 'domains_data', ['format' => 'hash']), 'Inspect cPanel domain ownership');
+                $inventory = $this->validateDomainInventory($inventory);
                 $adopt = $this->cpanelOptions($profile)['adopt_existing'] ?? $this->config['adopt_existing'] ?? false;
                 if ($this->classifyDomain($inventory, $domain) !== null && $adopt !== true) {
                     $blocked = 'An existing cPanel domain requires explicit adopt_existing: true after ownership review.';
@@ -297,6 +298,7 @@ final class CpanelProvider implements
             $domainInventory = null;
             if ($previousManifest === null) {
                 $domainInventory = $this->required($this->api()->uapi('DomainInfo', 'domains_data', ['format' => 'hash']), 'Inspect cPanel domain ownership');
+                $domainInventory = $this->validateDomainInventory($domainInventory);
                 $adopt = $this->cpanelOptions($profile)['adopt_existing'] ?? $this->config['adopt_existing'] ?? false;
                 if ($this->classifyDomain($domainInventory, $this->domain($profile)) !== null && $adopt !== true) {
                     throw new RuntimeException('Refusing cPanel apply to an existing domain without a matching Shipper manifest; explicitly set adopt_existing: true after reviewing the target.');
@@ -565,6 +567,7 @@ final class CpanelProvider implements
             $this->api()->uapi('DomainInfo', 'domains_data', ['format' => 'hash']),
             'List cPanel domains',
         );
+        $domains = $this->validateDomainInventory($domains);
         $existingType = $this->classifyDomain($domains, $domain);
 
         if ($existingType !== null) {
@@ -2974,6 +2977,27 @@ final class CpanelProvider implements
         }
 
         return $primary;
+    }
+
+    /** @return array<string, mixed> */
+    private function validateDomainInventory(mixed $data): array
+    {
+        $keys = ['main_domain', 'primary_domain', 'addon_domains', 'sub_domains', 'parked_domains'];
+        if (! \is_array($data) || \array_intersect($keys, \array_keys($data)) === []) {
+            throw new RuntimeException('cPanel returned an invalid domain inventory; refusing to infer domain absence.');
+        }
+        foreach ($keys as $key) {
+            if (! \array_key_exists($key, $data)) continue;
+            $value = $data[$key];
+            if (\in_array($key, ['main_domain', 'primary_domain'], true)) {
+                if ((\is_string($value) && \trim($value) !== '') || (\is_array($value) && $value !== [])) continue;
+            } elseif (\is_array($value)) {
+                continue;
+            }
+            throw new RuntimeException('cPanel returned malformed domain inventory fields; refusing to infer domain absence.');
+        }
+
+        return $data;
     }
 
     private function classifyDomain(mixed $data, string $domain, string $key = ''): ?string

@@ -106,6 +106,9 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
         }
 
         if (isset($this->responses[$key])) return $this->responses[$key];
+        if ($key === 'uapi:DomainInfo:domains_data') {
+            return $this->success(['main_domain' => 'example.com', 'sub_domains' => [], 'addon_domains' => [], 'parked_domains' => []]);
+        }
         if ($key === 'uapi:Fileman:get_file_content') {
             return ['success' => false, 'message' => 'No such file or directory', 'data' => null, 'raw' => []];
         }
