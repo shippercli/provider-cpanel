@@ -371,6 +371,28 @@ v.restore_release(sys.argv[2], sys.argv[3], active, sys.argv[5], 'sample', 'prod
                 with self.assertRaises(validator.InvalidRelease):
                     validator.cleanup_release(stage)
 
+    def test_journal_scope_change_after_lock_is_rejected(self):
+        for operation in [validator.recover_release, validator.cleanup_release]:
+            with self.subTest(operation=operation.__name__), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                first = root / 'first'
+                second = root / 'second'
+                first.mkdir()
+                second.mkdir()
+                home, active, archive, stage = self.prepare(first)
+                other_home, other_active, other_archive, other_stage = self.prepare(second)
+                self.restore(home, active, archive, stage)
+                self.restore(other_home, other_active, other_archive, other_stage)
+                original = validator.load_journal(stage)
+                changed = validator.load_journal(other_stage)
+                before = (other_stage / 'restore-state.json').read_bytes()
+                with mock.patch.object(validator, 'load_journal', side_effect=[original, changed]):
+                    with self.assertRaisesRegex(validator.InvalidRelease, 'journal scope changed after locking'):
+                        operation(stage)
+                self.assertEqual((other_stage / 'restore-state.json').read_bytes(), before)
+                self.assertEqual((other_stage / 'previous/old.txt').read_text(), 'old release')
+                self.assertEqual((other_active / 'index.txt').read_text(), 'new release')
+
     def test_cleanup_confirmed_promotion_preserves_active_files(self):
         with tempfile.TemporaryDirectory() as directory:
             home, active, archive, stage = self.prepare(Path(directory).resolve())

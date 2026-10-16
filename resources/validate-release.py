@@ -414,9 +414,12 @@ def journal_lock(home, active):
 
 def recover_release(destination):
     stage, home, active, journal = load_journal(destination)
+    locked_scope = (stage, home, active, journal['stage_id'])
     with journal_lock(home, active):
         # Re-read after locking; a different helper may have completed recovery.
         stage, home, active, journal = load_journal(destination)
+        if (stage, home, active, journal['stage_id']) != locked_scope:
+            raise InvalidRelease('journal scope changed after locking')
         if journal['phase'] == 'cleaning':
             raise InvalidRelease('cleanup already started; resume cleanup instead')
         if active.exists() or active.is_symlink():
@@ -439,8 +442,11 @@ def recover_release(destination):
 
 def cleanup_release(destination):
     stage, home, active, journal = load_journal(destination)
+    locked_scope = (stage, home, active, journal['stage_id'])
     with journal_lock(home, active):
         stage, home, active, journal = load_journal(destination)
+        if (stage, home, active, journal['stage_id']) != locked_scope:
+            raise InvalidRelease('journal scope changed after locking')
         if journal['phase'] not in ('promoted', 'cleaning') or directory_id(active) != journal['new_id']:
             raise InvalidRelease('cleanup requires a confirmed promoted deployment')
         previous = stage / 'previous'
