@@ -285,8 +285,6 @@ final class CpanelProvider implements
 
     public function apply(object $project, object $profile): bool
     {
-        $this->lastError = '';
-
         try {
             $this->assertAccountResourceOptions($profile);
         } catch (RuntimeException $exception) {
@@ -294,6 +292,8 @@ final class CpanelProvider implements
 
             return false;
         }
+
+        $this->lastError = '';
 
         try {
             $context = $this->context($project, $profile);
