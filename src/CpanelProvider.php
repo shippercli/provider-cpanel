@@ -418,8 +418,8 @@ final class CpanelProvider implements
             (new CpanelAccountResourceManager($this->api()))->destroy($manifest);
             $this->destroyDatabases($manifest);
             $this->destroyGitRepository($manifest);
-            $this->destroyAliases($manifest);
-            $this->destroyDomain($manifest);
+            $this->destroyAliases($manifest, $profile);
+            $this->destroyDomain($manifest, $profile);
             $this->destroyReleases($manifest);
             $this->destroyFiles($manifest);
             $this->runCustomOperations($profile, 'after_destroy', $context);
@@ -2152,7 +2152,7 @@ final class CpanelProvider implements
     /**
      * @param array<string, mixed> $manifest
      */
-    private function destroyAliases(array $manifest): void
+    private function destroyAliases(array $manifest, object $profile): void
     {
         $aliases = $manifest['aliases'] ?? [];
         if (! \is_array($aliases)) {
@@ -2166,8 +2166,10 @@ final class CpanelProvider implements
 
             $domain = $alias['domain'] ?? null;
             if (\is_string($domain) && $domain !== '') {
-                $this->required(
+                $this->requireDomainDeletion(
                     $this->api()->api2('Park', 'unpark', ['domain' => $domain]),
+                    $domain,
+                    $profile,
                     "Delete Shipper-managed cPanel alias {$domain}",
                 );
             }
@@ -2177,7 +2179,7 @@ final class CpanelProvider implements
     /**
      * @param array<string, mixed> $manifest
      */
-    private function destroyDomain(array $manifest): void
+    private function destroyDomain(array $manifest, object $profile): void
     {
         $domain = $manifest['domain'] ?? null;
         if (! \is_array($domain) || ! (bool) ($domain['created'] ?? false)) {
@@ -2191,8 +2193,10 @@ final class CpanelProvider implements
         }
 
         if ($type === 'subdomain') {
-            $this->required(
+            $this->requireDomainDeletion(
                 $this->api()->api2('SubDomain', 'delsubdomain', ['domain' => $name]),
+                $name,
+                $profile,
                 "Delete Shipper-managed cPanel subdomain {$name}",
             );
         } elseif ($type === 'addon') {
@@ -2205,14 +2209,69 @@ final class CpanelProvider implements
                 $primaryDomain = $this->primaryDomain($domains);
             }
 
-            $this->required(
+            $this->requireDomainDeletion(
                 $this->api()->api2('AddonDomain', 'deladdondomain', [
                     'domain' => $name,
                     'subdomain' => $this->slug($name).'_'.$primaryDomain,
                 ]),
+                $name,
+                $profile,
                 "Delete Shipper-managed cPanel addon domain {$name}",
             );
         }
+    }
+
+    /** @param array{success: bool, message: string, data: mixed, raw: array<string, mixed>} $deletion */
+    private function requireDomainDeletion(array $deletion, string $domain, object $profile, string $operation): void
+    {
+        if ($deletion['success']) {
+            return;
+        }
+
+        $timeout = $this->isAmbiguousTimeout($deletion['message'])
+            ? \max(0, $this->intCpanelOption($profile, 'domain_reconciliation_timeout', 120))
+            : 0;
+        $interval = \max(0, \min(10_000, $this->intCpanelOption($profile, 'domain_reconciliation_interval_ms', 2000)));
+        $deadline = \microtime(true) + $timeout;
+
+        do {
+            $inventory = $this->api()->uapi('DomainInfo', 'list_domains');
+            if ($inventory['success'] && $this->domainIsAbsent($inventory['data'], $domain)) {
+                return;
+            }
+
+            $remaining = $deadline - \microtime(true);
+            if ($remaining <= 0) {
+                break;
+            }
+
+            \usleep((int) \min($interval * 1000, $remaining * 1_000_000));
+        } while (true);
+
+        $this->required($deletion, $operation);
+    }
+
+    private function domainIsAbsent(mixed $inventory, string $domain): bool
+    {
+        if (! \is_array($inventory) || ! \is_string($inventory['main_domain'] ?? null)
+            || $inventory['main_domain'] === '' || \strcasecmp($inventory['main_domain'], $domain) === 0) {
+            return false;
+        }
+
+        foreach (['addon_domains', 'sub_domains', 'parked_domains'] as $category) {
+            $domains = $inventory[$category] ?? null;
+            if (! \is_array($domains) || ! \array_is_list($domains)) {
+                return false;
+            }
+
+            foreach ($domains as $name) {
+                if (! \is_string($name) || $name === '' || \strcasecmp($name, $domain) === 0) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     /**
