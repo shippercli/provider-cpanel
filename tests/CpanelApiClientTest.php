@@ -45,7 +45,7 @@ test('normalizes flat and nested UAPI responses', function (): void {
     expect($success['success'])->toBeTrue()
         ->and($success['data'])->toBe(['ok' => true])
         ->and($failure['success'])->toBeFalse()
-        ->and($failure['message'])->toBe('Feature disabled')
+        ->and($failure['message'])->toBe('cPanel API feature unavailable')
         ->and((string) $history[0]['request']->getUri())->toStartWith('https://cpanel.example.com:2083/execute/');
 });
 
@@ -106,7 +106,7 @@ test('rejects API 2 file operations that report errors in successful output', fu
     ]);
 
     expect($result['success'])->toBeFalse()
-        ->and($result['message'])->toContain('Permission denied');
+        ->and($result['message'])->toBe('cPanel API access denied');
 });
 
 test('encodes repeated UAPI parameters without bracket syntax', function (): void {
