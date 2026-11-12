@@ -163,6 +163,40 @@ test('fileman apply creates directories and uploads mapped files', function (): 
         ->and($client->uploadedFiles)->toHaveKey('.shipper-manifest.json');
 });
 
+test('fileman apply keeps the last successful manifest when deployment fails after cleanup', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $client->responses['uapi:Fileman:list_files'] = $client->success([
+        ['file' => '.shipper-manifest.json'],
+        ['file' => 'old.html'],
+    ]);
+    $client->responses['uapi:Fileman:get_file_content'] = $client->success([
+        'content' => '{"project":"sample","profile":"production"}',
+    ]);
+    $client->responses['api2:Cron:add_line'] = [
+        'success' => false, 'message' => 'Extraction failed', 'data' => null, 'raw' => [],
+    ];
+    $profile = new CpanelTestProfile([
+        'domain' => 'app.example.com',
+        'deploy_path' => '/app',
+        'runtime' => ['type' => 'static'],
+        'cpanel' => ['archive_extraction' => 'cron'],
+    ]);
+
+    $project = new CpanelTestProject(cpanelProviderFixture([
+        'index.html' => 'new release',
+        '.shipper-manifest.json' => '{}',
+    ]));
+
+    expect($provider->apply($project, $profile))->toBeFalse()
+        ->and($client->uploadedArchiveEntries)->not->toContain('.shipper-manifest.json')
+        ->and($client->uploadedFiles)->not->toHaveKey('.shipper-manifest.json')
+        ->and($provider->getLastError())->toContain('Extraction failed');
+
+    $operations = cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop');
+    expect($operations[0]['parameters']['sourcefiles'])->toBe('app/old.html');
+});
+
 test('fileman can extract one archive through a monitored cpanel task', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [
@@ -204,6 +238,7 @@ test('public web directory archives keep the application and publish its web roo
             'bootstrap/app.php' => '<?php',
             'public/index.php' => "<?php require __DIR__.'/../vendor/autoload.php';",
             'public/app.css' => 'body {}',
+            'public/.shipper-manifest.json/extra' => '{}',
         ]),
         webDirectory: '/public',
     );
@@ -213,6 +248,7 @@ test('public web directory archives keep the application and publish its web roo
         'deploy_path' => '/laravel',
         'runtime' => ['type' => 'php', 'version' => '8.4'],
     ])))->toBeTrue()
+        ->and($client->uploadedPaths)->not->toHaveKey('laravel/.shipper-manifest.json/extra')
         ->and($client->uploadedPaths)->toHaveKeys([
             'laravel/app/composer.json',
             'laravel/app/bootstrap/app.php',

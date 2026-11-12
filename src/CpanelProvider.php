@@ -1002,7 +1002,7 @@ final class CpanelProvider implements
             $this->ensureRemoteDirectory($deployDirectory);
 
             if ($this->boolCpanelOption($profile, 'clean', true)) {
-                $this->cleanManagedDirectory($deployDirectory);
+                $this->cleanManagedDirectory($deployDirectory, preserveManifest: true);
             }
 
             $extraction = $this->archiveExtractionMethod($profile, $archivePath);
@@ -2206,7 +2206,7 @@ final class CpanelProvider implements
         ]), "Remove Shipper-managed cPanel releases for {$project} ({$profile})");
     }
 
-    private function cleanManagedDirectory(string $directory): void
+    private function cleanManagedDirectory(string $directory, bool $preserveManifest = false): void
     {
         $result = $this->api()->uapi('Fileman', 'list_files', [
             'dir' => $directory,
@@ -2216,10 +2216,15 @@ final class CpanelProvider implements
             return;
         }
 
+        $protected = ['.', '..', '.well-known'];
+        if ($preserveManifest) {
+            $protected[] = self::MANIFEST_FILENAME;
+        }
+
         $names = $this->fileNames($result['data']);
         $managed = [];
         foreach ($names as $name) {
-            if (\in_array($name, ['.', '..', '.well-known'], true)) {
+            if (\in_array($name, $protected, true)) {
                 continue;
             }
             $managed[] = $this->relativeHomePath($directory.'/'.$name);
@@ -2417,7 +2422,7 @@ final class CpanelProvider implements
         }
 
         $webDirectory = \trim($this->projectWebDirectory($project), '/');
-        $exclusions = ['.git', '.github', 'node_modules'];
+        $exclusions = ['.git', '.github', 'node_modules', self::MANIFEST_FILENAME];
 
         try {
             $iterator = new RecursiveIteratorIterator(
@@ -2441,7 +2446,7 @@ final class CpanelProvider implements
 
                 if ($webDirectory !== '' && ($relative === $webDirectory || \str_starts_with($relative, $webDirectory.'/'))) {
                     $publicEntry = \ltrim(\substr($relative, \strlen($webDirectory)), '/');
-                    if ($publicEntry === '') {
+                    if ($publicEntry === '' || $this->isExcludedPath($publicEntry, [self::MANIFEST_FILENAME])) {
                         continue;
                     }
 
