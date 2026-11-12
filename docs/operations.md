@@ -22,6 +22,9 @@ Use `--lines` from `1` through `5000`.
 
 ## Rollback
 
+[Release inventory validation](release-inventories.md) controls archive selection
+and distinguishes unavailable listings from verified empty ones.
+
 Rollback requires a matching Shipper manifest and at least one deployment
 release:
 

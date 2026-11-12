@@ -18,6 +18,9 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
     /** @var array<string, array<int, array{success: bool, message: string, data: mixed, raw: array<string, mixed>}>> */
     public array $responseQueues = [];
 
+    /** @var array<string, \Closure(): array> */
+    public array $uapiResponseFactories = [];
+
     /** @var array<int, string> */
     public array $uploadedArchiveEntries = [];
 
@@ -30,6 +33,17 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
     public function uapi(string $module, string $function, array $parameters = [], string $method = 'GET'): array
     {
         $this->calls[] = compact('module', 'function', 'parameters', 'method') + ['surface' => 'uapi'];
+
+        $factoryKey = "{$module}:{$function}";
+        if (isset($this->uapiResponseFactories[$factoryKey])) {
+            return ($this->uapiResponseFactories[$factoryKey])();
+        }
+
+        if ($module === 'Fileman' && $function === 'list_files'
+            && ! \array_key_exists('uapi:Fileman:list_files', $this->responses)
+            && ($this->responseQueues['uapi:Fileman:list_files'] ?? []) === []) {
+            return $this->success(['dirs' => [], 'files' => []]);
+        }
 
         return $this->response("uapi:{$module}:{$function}");
     }

@@ -445,6 +445,14 @@ final class CpanelProvider implements
             }
         }
 
+        try {
+            $releases = $this->availableReleases($project, $profile);
+            $releaseInventory = ['available' => true];
+        } catch (RuntimeException $exception) {
+            $releases = [];
+            $releaseInventory = ['available' => false, 'error' => $exception->getMessage()];
+        }
+
         return [
             'provider' => $this->getName(),
             'project' => $this->projectName($project),
@@ -468,7 +476,8 @@ final class CpanelProvider implements
                 'email_forwarders' => $manifest['email_forwarders'] ?? [],
                 'ftp_accounts' => $manifest['ftp_accounts'] ?? [],
             ] : null,
-            'releases' => $this->availableReleases($project, $profile),
+            'releases' => $releases,
+            'release_inventory' => $releaseInventory,
         ];
     }
 
@@ -500,7 +509,7 @@ final class CpanelProvider implements
             $selected = $this->selectRelease($project, $profile, $release);
 
             if ($this->boolCpanelOption($profile, 'backup_before_rollback', false)) {
-                $this->createReleaseBackup($project, $profile, $manifest, true);
+                $this->createReleaseBackup($project, $profile, $manifest, true, [$selected['filename']]);
             }
 
             $deployPath = $manifest['deploy_path'] ?? null;
@@ -508,20 +517,60 @@ final class CpanelProvider implements
                 throw new RuntimeException('Refusing cPanel rollback because the manifest deploy path is unsafe');
             }
 
-            $deployDirectory = $this->relativeHomePath($deployPath);
-            $this->cleanManagedDirectory($deployDirectory);
-            $this->ensureRemoteDirectory($deployDirectory);
-
-            $tar = $this->stringCpanelOption($profile, 'tar_path', '/usr/bin/tar');
-            $command = \escapeshellarg($tar).' -xzf '.\escapeshellarg($selected['path'])
-                .' -C '.\escapeshellarg($this->absolutePath($deployPath));
-            $this->runOneTimeCommand("Restore cPanel release {$selected['id']}", $command, $profile);
+            $this->restoreStagedRelease($project, $profile, $selected, $deployPath);
 
             return true;
         } catch (Throwable $exception) {
             $this->lastError = $exception->getMessage();
 
             return false;
+        }
+    }
+
+    /** @param array{id: string, filename: string, path: string} $selected */
+    private function restoreStagedRelease(object $project, object $profile, array $selected, string $deployPath): void
+    {
+        $helper = \dirname(__DIR__).'/resources/validate-release.py';
+        $source = \file_get_contents($helper);
+        if (! \is_string($source) || $source === '') {
+            throw new RuntimeException('The cPanel staged restore helper is unavailable');
+        }
+        $python = $this->stringCpanelOption($profile, 'rollback_python_path', '/usr/bin/python3');
+        if ($python === '') {
+            throw new RuntimeException('cPanel rollback_python_path must select a Python 3 executable');
+        }
+        $home = $this->resolveHomeDirectory();
+        $token = \bin2hex(\random_bytes(16));
+        $name = '.shipper-restore-'.$token.'.py';
+        $remote = $home.'/'.$name;
+        $stage = $home.'/.shipper-restore-'.$token.'.stage';
+        $this->required($this->api()->uploadFile($home, $helper, $name, false), 'Upload cPanel staged restore helper');
+        // Execute the same bytes whose digest was checked, without a second read.
+        $bootstrap = 'import hashlib,sys; p=sys.argv.pop(1); expected=sys.argv.pop(1); '
+            .'data=open(p,"rb").read(); '
+            .'hashlib.sha256(data).hexdigest()==expected or sys.exit("Restore helper integrity check failed"); '
+            .'exec(compile(data,p,"exec"),{"__name__":"__main__","__file__":p})';
+        $arguments = [$python, '-c', $bootstrap, $remote, \hash('sha256', $source), '--restore',
+            $selected['path'], $stage, $this->absolutePath($deployPath), $home,
+            $this->projectName($project), $this->profileName($profile), $this->domain($profile)];
+        $failure = null;
+        try {
+            $command = \implode(' ', \array_map('escapeshellarg', $arguments));
+            $this->runOneTimeCommand("Restore cPanel release {$selected['id']}", $command, $profile);
+        } catch (Throwable $error) {
+            $failure = $error;
+        }
+        try {
+            $this->required($this->api()->api2('Fileman', 'fileop', [
+                'op' => 'unlink', 'sourcefiles' => $name,
+            ]), 'Remove cPanel staged restore helper');
+        } catch (Throwable $error) {
+            $failure = $failure === null ? $error : new RuntimeException(
+                $failure->getMessage().'; helper cleanup also failed: '.$error->getMessage(), 0, $failure,
+            );
+        }
+        if ($failure !== null) {
+            throw new RuntimeException('Staged cPanel restore failed; retain and inspect '.$stage.': '.$failure->getMessage(), 0, $failure);
         }
     }
 
@@ -1797,6 +1846,7 @@ final class CpanelProvider implements
     }
 
     /**
+     * @param array<int, string> $protectedReleases
      * @return array{id: string, filename: string, path: string, created_at: string}|null
      */
     private function createReleaseBackup(
@@ -1804,6 +1854,7 @@ final class CpanelProvider implements
         object $profile,
         ?array $manifest,
         bool $force = false,
+        array $protectedReleases = [],
     ): ?array {
         if (! $force && ! $this->boolCpanelOption($profile, 'backup_before_deploy', false)) {
             return null;
@@ -1837,6 +1888,7 @@ final class CpanelProvider implements
             $project,
             $profile,
             $this->intCpanelOption($profile, 'release_retention', 5),
+            [...$protectedReleases, $filename],
         );
 
         return [
@@ -1857,15 +1909,35 @@ final class CpanelProvider implements
             'dir' => $this->relativeHomePath($directory),
             'show_hidden' => 1,
         ]);
-        if (! $result['success']) {
-            return [];
+        $data = $this->required($result, 'Read cPanel release inventory');
+        if (\is_array($data) && ! \array_is_list($data)) {
+            if (! \is_array($data['dirs'] ?? null) || ! \array_is_list($data['dirs'])
+                || ! \is_array($data['files'] ?? null) || ! \array_is_list($data['files'])) {
+                throw new RuntimeException('Unreadable cPanel release inventory');
+            }
+            $data = [...$data['dirs'], ...$data['files']];
+        }
+        if (! \is_array($data) || ! \array_is_list($data)) {
+            throw new RuntimeException('Unreadable cPanel release inventory');
         }
 
         $filenames = [];
-        foreach ($this->fileNames($result['data']) as $name) {
-            $filename = \basename($name);
-            if (\preg_match(self::RELEASE_FILENAME_PATTERN, $filename) === 1) {
-                $filenames[$filename] = true;
+        $seen = [];
+        foreach ($data as $row) {
+            $name = \is_array($row) ? ($row['file'] ?? null) : null;
+            $type = \is_array($row) ? ($row['type'] ?? null) : null;
+            if (! \is_string($name) || $name === '' || \basename($name) !== $name
+                || \str_contains($name, '\\') || \preg_match('/[\x00-\x1f\x7f]/', $name)
+                || ! \in_array($type, ['file', 'dir', 'char', 'block', 'fifo', 'link', 'socket'], true)
+                || isset($seen[$name])) {
+                throw new RuntimeException('Invalid or ambiguous cPanel release inventory');
+            }
+            $seen[$name] = true;
+            if (\preg_match(self::RELEASE_FILENAME_PATTERN, $name) === 1) {
+                if ($type !== 'file') {
+                    throw new RuntimeException('Unsafe archive entry in cPanel release inventory');
+                }
+                $filenames[$name] = true;
             }
         }
         $filenames = \array_keys($filenames);
@@ -1915,10 +1987,14 @@ final class CpanelProvider implements
         throw new RuntimeException("cPanel release archive does not exist: {$release}");
     }
 
-    private function pruneReleases(object $project, object $profile, int $retention): void
+    /** @param array<int, string> $protectedReleases */
+    private function pruneReleases(object $project, object $profile, int $retention, array $protectedReleases = []): void
     {
         $releases = $this->availableReleases($project, $profile);
         foreach (\array_slice($releases, \max(1, $retention)) as $release) {
+            if (\in_array($release['filename'], $protectedReleases, true)) {
+                continue;
+            }
             $this->required($this->api()->api2('Fileman', 'fileop', [
                 'op' => 'unlink',
                 'sourcefiles' => $this->relativeHomePath($release['path']),
