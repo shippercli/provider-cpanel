@@ -2333,7 +2333,8 @@ final class CpanelProvider implements
                 'name' => $segment,
                 'permissions' => '0755',
             ]);
-            if (! $result['success'] && ! $this->remoteDirectoryExists($candidate)) {
+            if (! $result['success'] && ! $this->remoteDirectoryExists($candidate)
+                && ! $this->remoteDirectoryExistsViaStat($current, $segment)) {
                 $this->required($result, "Create cPanel deployment directory {$candidate}");
             }
 
@@ -2356,6 +2357,28 @@ final class CpanelProvider implements
         return \is_string($type)
             && \strtolower($type) === 'dir'
             && ($exists === null || (int) $exists === 1);
+    }
+
+    private function remoteDirectoryExistsViaStat(string $parent, string $name): bool
+    {
+        $result = $this->api()->api2('Fileman', 'statfiles', [
+            'dir' => $parent === $this->resolveHomeDirectory() ? '.' : $this->relativeHomePath($parent),
+            'files' => $name,
+        ]);
+        if (! $result['success'] || ! \is_array($result['data'])) {
+            return false;
+        }
+
+        foreach ($result['data'] as $entry) {
+            if (\is_array($entry)
+                && ($entry['fullpath'] ?? null) === $parent.'/'.$name
+                && ($entry['type'] ?? null) === 'dir'
+                && \in_array($entry['exists'] ?? null, [1, '1'], true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function uploadArchiveContents(string $archivePath, string $deployDirectory): void

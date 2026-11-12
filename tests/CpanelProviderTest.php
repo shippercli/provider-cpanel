@@ -1188,7 +1188,7 @@ test('apply refuses to overwrite another deployment manifest', function (): void
         ->and(cpanelProviderCalls($client, 'uapi', 'Features', 'list_features'))->toHaveCount(0);
 });
 
-test('apply archives the previous managed release before deployment', function (): void {
+test('apply archives the previous managed release before deployment', function (bool $directoryAlreadyExists): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [
         'deployment_method' => 'fileman',
@@ -1203,6 +1203,14 @@ test('apply archives the previous managed release before deployment', function (
         $client->success(['content' => "0\n"]),
     ];
     $client->responses['api2:Cron:add_line'] = $client->success([['linekey' => '91']]);
+    if ($directoryAlreadyExists) {
+        $client->responseQueues['api2:Fileman:mkdir'] = [
+            ['success' => false, 'message' => 'cPanel API reported failure', 'data' => null, 'raw' => []],
+        ];
+        $client->responses['api2:Fileman:statfiles'] = $client->success([
+            ['fullpath' => '/home/shipper/.shipper', 'type' => 'dir', 'exists' => 1],
+        ]);
+    }
 
     expect($provider->apply(
         new CpanelTestProject(cpanelProviderFixture()),
@@ -1225,7 +1233,11 @@ test('apply archives the previous managed release before deployment', function (
         ->toContain('/.shipper/releases/sample/production/')
         ->not->toContain('%')
         ->and($writtenManifest['previous_release']['id'])->toMatch('/^\d{14}-[a-f0-9]{8}$/');
-});
+    if ($directoryAlreadyExists) {
+        expect(cpanelProviderCalls($client, 'api2', 'Fileman', 'statfiles')[0]['parameters'])
+            ->toBe(['dir' => '.', 'files' => '.shipper']);
+    }
+})->with(['creates directories' => [false], 'reuses existing hidden directory' => [true]]);
 
 test('rollback restores a selected managed release archive', function (): void {
     $client = new FakeCpanelApiClient;
