@@ -6,7 +6,9 @@ namespace ShipperCli\ProviderCpanel\Api;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\ClientInterface;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\GuzzleException;
+use GuzzleHttp\Exception\RequestException;
 use InvalidArgumentException;
 use JsonException;
 use RuntimeException;
@@ -184,7 +186,7 @@ final class CpanelApiClient implements CpanelApiClientInterface
 
             return $result;
         } catch (GuzzleException|JsonException $exception) {
-            return $this->failedResponse($exception->getMessage());
+            return $this->exceptionResponse($exception);
         } finally {
             foreach ($handles as $handle) {
                 if (\is_resource($handle)) {
@@ -230,7 +232,7 @@ final class CpanelApiClient implements CpanelApiClientInterface
 
             return $this->normalizeResponse($this->decode((string) $response->getBody()), $surface);
         } catch (GuzzleException|JsonException $exception) {
-            return $this->failedResponse($exception->getMessage());
+            return $this->exceptionResponse($exception);
         }
     }
 
@@ -495,6 +497,25 @@ final class CpanelApiClient implements CpanelApiClientInterface
         }
 
         return null;
+    }
+
+    /** @return array{success: false, message: string, data: null, raw: array<string, mixed>} */
+    private function exceptionResponse(GuzzleException|JsonException $exception): array
+    {
+        if ($exception instanceof JsonException) {
+            return $this->failedResponse('cPanel API returned invalid JSON');
+        }
+        if ($exception instanceof RequestException && $exception->hasResponse()) {
+            return $this->failedResponse('cPanel API request failed with HTTP '.$exception->getResponse()->getStatusCode());
+        }
+
+        if (($exception instanceof ConnectException || $exception instanceof RequestException)
+            && ($exception->getHandlerContext()['errno'] ?? null) === 28
+        ) {
+            return $this->failedResponse('cPanel API request timed out');
+        }
+
+        return $this->failedResponse('cPanel API transport failed');
     }
 
     /**
