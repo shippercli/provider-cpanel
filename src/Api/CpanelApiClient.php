@@ -11,7 +11,6 @@ use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\Exception\RequestException;
 use InvalidArgumentException;
 use JsonException;
-use RuntimeException;
 
 final class CpanelApiClient implements CpanelApiClientInterface
 {
@@ -181,7 +180,7 @@ final class CpanelApiClient implements CpanelApiClientInterface
             foreach ($uploads as $upload) {
                 if (\is_array($upload) && ($this->hasApiErrors($upload) || (\array_key_exists('status', $upload) && ! $this->isSuccessFlag($upload['status'])))) {
                     $result['success'] = false;
-                    $result['message'] = $this->findValueByKeys($upload, ['reason', 'error']) ?? 'cPanel file upload failed';
+                    $result['message'] = $this->extractMessage($upload);
 
                     break;
                 }
@@ -394,23 +393,26 @@ final class CpanelApiClient implements CpanelApiClientInterface
             $event = \is_array($result['event'] ?? null) ? $result['event'] : [];
             $success = $this->isSuccessFlag($event['result'] ?? null) && ! $this->hasApiErrors($result) && ! $this->hasApiErrors($payload);
             $data = $result['data'] ?? [];
+            $rowMessage = '';
 
             if (\is_array($data)) {
                 foreach ($data as $item) {
                     if (\is_array($item) && ($this->hasApiErrors($item) || (\array_key_exists('result', $item) && ! $this->isSuccessFlag($item['result'])))) {
                         $success = false;
+                        $rowMessage = $this->extractMessage($item);
                         break;
                     }
 
                     $output = \is_array($item) ? $this->firstString($item['output'] ?? null) : null;
                     if ($output !== null && \preg_match('/(?:^|\R)\s*(?:error:|.*\bpermission denied\b)/i', $output) === 1) {
                         $success = false;
+                        $rowMessage = $output;
                         break;
                     }
                 }
             }
 
-            return $this->safeApiResponse($success, $this->extractMessage($result), $data, $payload);
+            return $this->safeApiResponse($success, $rowMessage.' '.$this->extractMessage($result), $data, $payload);
         }
 
         if ($surface === 'whm') {
@@ -456,7 +458,9 @@ final class CpanelApiClient implements CpanelApiClientInterface
     private function safeApiResponse(bool $success, string $message, mixed $data, array $payload): array
     {
         if (! $success) {
-            return $this->failedResponse($this->safeApiFailureMessage($message));
+            $outerError = $this->firstString($payload['errors'] ?? null) ?? $this->firstString($payload['error'] ?? null);
+
+            return $this->failedResponse($this->safeApiFailureMessage($message.' '.$outerError));
         }
 
         return ['success' => true, 'message' => 'OK', 'data' => $data, 'raw' => $payload];
@@ -467,15 +471,17 @@ final class CpanelApiClient implements CpanelApiClientInterface
         $message = \strtolower($message);
 
         return match (true) {
-            \str_contains($message, 'permission denied'), \str_contains($message, 'access denied'),
-                \str_contains($message, 'unauthorized') => 'cPanel API access denied',
             \str_contains($message, 'already exists'), \str_contains($message, 'already configured') => 'cPanel API resource already exists',
             \str_contains($message, 'no such file'), \str_contains($message, 'not found'),
                 \str_contains($message, 'does not exist') => 'cPanel API resource not found',
-            \str_contains($message, 'timed out'), \str_contains($message, 'timeout') => 'cPanel API operation timed out',
+            \str_contains($message, 'timed out'), \str_contains($message, 'timeout'),
+                \str_contains($message, 'curl error 28') => 'cPanel API operation timed out',
+            \str_contains($message, 'not enabled'), \str_contains($message, 'unknown app') => 'cPanel API feature unavailable',
             (\str_contains($message, 'feature') || \str_contains($message, 'module'))
-                && (\str_contains($message, 'disabled') || \str_contains($message, 'unknown') || \str_contains($message, 'not enabled')
+                && (\str_contains($message, 'disabled') || \str_contains($message, 'unknown')
                     || \str_contains($message, 'unavailable')) => 'cPanel API feature unavailable',
+            \str_contains($message, 'permission denied'), \str_contains($message, 'access denied'),
+                \str_contains($message, 'unauthorized') => 'cPanel API access denied',
             default => 'cPanel API reported failure',
         };
     }

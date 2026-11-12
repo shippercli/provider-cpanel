@@ -71,7 +71,25 @@ test('safe API error categories retain required provider classifications', funct
     ['Permission denied', 'cPanel API access denied'],
     ['Operation timed out', 'cPanel API operation timed out'],
     ['Feature disabled', 'cPanel API feature unavailable'],
+    ['Git Version Control is not enabled for this account', 'cPanel API feature unavailable'],
+    ['Access denied: Git Version Control is not enabled for this account', 'cPanel API feature unavailable'],
+    ['Unknown app VersionControl', 'cPanel API feature unavailable'],
+    ['cURL error 28', 'cPanel API operation timed out'],
 ]);
+
+test('an error outside the UAPI result retains its retry classification', function (): void {
+    $history = [];
+    $payload = ['result' => ['status' => 1, 'data' => []], 'errors' => ['Operation timed out: synthetic-secret']];
+    $client = cpanelTestClient([new Response(200, [], json_encode($payload))], $history);
+    $api = new CpanelApiClient(['host' => 'cpanel.example.com', 'username' => 'shipper', 'api_token' => 'synthetic-token'], $client);
+
+    expect($api->uapi('Custom', 'operation'))->toBe([
+        'success' => false,
+        'message' => 'cPanel API operation timed out',
+        'data' => null,
+        'raw' => [],
+    ]);
+});
 
 test('valid canonical statuses preserve successful payload data', function (mixed $flag): void {
     $history = [];
