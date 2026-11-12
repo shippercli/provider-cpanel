@@ -4,15 +4,19 @@
 
 | Key | Required | Description |
 | --- | --- | --- |
-| `host` | Yes | cPanel hostname or URL |
-| `port` / `cpanel_port` | No | cPanel port; defaults to `2083` for HTTPS |
+| `host` | Yes | cPanel hostname or HTTPS URL; plaintext HTTP is rejected |
+| `port` / `cpanel_port` | No | HTTPS cPanel port; defaults to `2083` |
 | `username` | Yes | cPanel account username |
 | `api_token` | One credential | Preferred cPanel account API token |
 | `password` | One credential | cPanel account password |
 | `origin_ip` | No | Connect to a fixed origin IP while retaining the host for TLS |
-| `verify_tls` | No | Verify the cPanel TLS certificate; defaults to `true` |
+| `verify_tls` | No | Must remain `true`; disabling certificate verification is rejected |
 | `whm_username` | No | Reseller or root username for explicit WHM operations |
 | `whm_api_token` | No | Token for explicit WHM operations |
+
+cPanel and WHM credentials are sent only over HTTPS with certificate
+verification enabled. Custom ports must also provide HTTPS; the conventional
+plaintext ports are never used as HTTP fallbacks.
 
 ## Deployment
 
@@ -65,11 +69,20 @@ databases:
     user: app_production
     password: "${DB_PASSWORD}"
     privileges: ALL PRIVILEGES
+    adopt_existing: false
+    update_password: false
 ```
 
 `mysql` and `postgresql` are supported. cPanel may prefix database and user
 names with the account username. Shipper injects the resolved names into the
-deployment environment.
+deployment environment. Existing databases and users are discovered and reused
+without privilege or password changes by default. Set `adopt_existing: true` on
+an exact database declaration to authorize privilege reconciliation for an
+existing database. Changing an existing shared cPanel database user's password
+also requires `update_password: true`; password rotation is never implied by
+adoption. Newly created databases receive the configured privileges as part of
+provisioning. Destroy deletes only databases and users Shipper recorded as
+created in its deployment manifest.
 
 ## Releases
 
