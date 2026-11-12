@@ -990,7 +990,10 @@ test('retry after a failed first apply checks the current document root', functi
     $client = new FakeCpanelApiClient;
     $client->responseQueues['uapi:DomainInfo:domains_data'] = [
         $client->success(['main_domain' => 'example.com', 'sub_domains' => []]),
-        $client->success(['main_domain' => 'example.com', 'sub_domains' => ['preview.example.com']]),
+        $client->success([
+            'main_domain' => 'example.com',
+            'sub_domains' => [['servername' => 'preview.example.com']],
+        ]),
     ];
     $client->responseQueues['api2:Fileman:mkdir'] = [
         ['success' => false, 'message' => 'Directory operation failed', 'data' => null, 'raw' => []],
@@ -1042,7 +1045,8 @@ test('retry after a failed first apply checks the current document root', functi
         ->and(cpanelProviderCalls($client, 'uapi', 'SubDomain', 'addsubdomain'))->toHaveCount(1);
 
     $manifest = \json_decode($client->uploadedFiles['.shipper-manifest.json'], true);
-    expect($manifest['domain']['created'])->toBeFalse()
+    expect($manifest['domain']['type'])->toBe('subdomain')
+        ->and($manifest['domain']['created'])->toBeFalse()
         ->and(\array_key_exists($checkpoint, $client->uploadedFiles))->toBe($cleanupFails);
 
     if ($cleanupFails) {

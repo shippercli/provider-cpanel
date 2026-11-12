@@ -3002,26 +3002,32 @@ final class CpanelProvider implements
         return $primary;
     }
 
-    private function classifyDomain(mixed $data, string $domain, string $key = ''): ?string
+    private function classifyDomain(mixed $data, string $domain, string $type = 'primary'): ?string
     {
         if (! \is_array($data)) {
             return null;
         }
 
         foreach ($data as $itemKey => $value) {
-            $nextKey = \is_string($itemKey) ? $itemKey : $key;
-            if (\is_string($value) && \strtolower($value) === $domain) {
-                $lower = \strtolower($nextKey);
-
-                return match (true) {
-                    \str_contains($lower, 'addon') => 'addon',
-                    \str_contains($lower, 'sub') => 'subdomain',
-                    \str_contains($lower, 'park'), \str_contains($lower, 'alias') => 'alias',
-                    default => 'primary',
-                };
+            $key = \is_string($itemKey) ? \strtolower($itemKey) : '';
+            if ($key === $domain && \is_array($value)) {
+                return $type;
             }
 
-            $found = $this->classifyDomain($value, $domain, $nextKey);
+            $nextType = match ($key) {
+                'addon_domains' => 'addon',
+                'sub_domains' => 'subdomain',
+                'parked_domains', 'alias_domains' => 'alias',
+                'main_domain', 'primary_domain' => 'primary',
+                default => $type,
+            };
+            if (\is_string($value) && \strtolower($value) === $domain
+                && \in_array($key, ['', 'main_domain', 'primary_domain', 'servername', 'domain'], true)
+            ) {
+                return $nextType;
+            }
+
+            $found = $this->classifyDomain($value, $domain, $nextType);
             if ($found !== null) {
                 return $found;
             }
