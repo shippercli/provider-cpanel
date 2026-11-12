@@ -16,6 +16,9 @@ implementation is bundled into the CLI.
 Use a cPanel API token when the hosting provider allows one. Password
 authentication remains available for hosts that do not expose account tokens.
 
+Configure the final API endpoint directly; authenticated API calls reject
+redirects. See the [API redirect policy](docs/api-redirects.md).
+
 ```yaml
 providers:
   cpanel:
