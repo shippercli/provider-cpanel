@@ -6,11 +6,15 @@ namespace ShipperCli\ProviderCpanel\Tests\Fixtures;
 
 final class CpanelTestProject
 {
-    /** @param array<string, mixed> $repository */
+    /**
+     * @param array<string, mixed> $repository
+     * @param array<int, object> $databases
+     */
     public function __construct(
         private readonly string $path,
         private readonly array $repository = [],
         private readonly string $webDirectory = '/',
+        private readonly array $databases = [],
     ) {}
 
     public function name(): string
@@ -42,7 +46,7 @@ final class CpanelTestProject
     /** @return array<int, mixed> */
     public function databases(): array
     {
-        return [];
+        return $this->databases;
     }
 
     /** @return array<int, mixed> */
