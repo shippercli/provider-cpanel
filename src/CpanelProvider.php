@@ -275,6 +275,10 @@ final class CpanelProvider implements
             $this->runCustomOperations($profile, 'before_apply', $context);
             $features = $this->required($this->api()->uapi('Features', 'list_features'), 'Discover cPanel features');
             $domainState = $this->ensureDomain($profile);
+            $checkpoint = ! $domainState['created']
+                && ($previousManifest['domain']['domain'] ?? null) === $domainState['domain']
+                ? null
+                : $this->checkDomainRetry($project, $profile, $domainState);
             $domainState = $this->preserveOwnership(
                 $domainState,
                 $previousManifest['domain'] ?? null,
@@ -369,6 +373,17 @@ final class CpanelProvider implements
                 ...$context,
                 'manifest' => $manifest,
             ]);
+            if ($checkpoint !== null) {
+                try {
+                    $this->api()->api2('Fileman', 'fileop', [
+                        'op' => 'trash',
+                        'sourcefiles' => $this->resolveHomeDirectory().'/'.$checkpoint,
+                        'doubledecode' => 1,
+                    ]);
+                } catch (Throwable) {
+                    // A stale checkpoint cannot claim a domain or invalidate a completed deployment.
+                }
+            }
 
             return true;
         } catch (Throwable $exception) {
@@ -1002,7 +1017,7 @@ final class CpanelProvider implements
             $this->ensureRemoteDirectory($deployDirectory);
 
             if ($this->boolCpanelOption($profile, 'clean', true)) {
-                $this->cleanManagedDirectory($deployDirectory);
+                $this->cleanManagedDirectory($deployDirectory, preserveManifest: true);
             }
 
             $extraction = $this->archiveExtractionMethod($profile, $archivePath);
@@ -1654,9 +1669,61 @@ final class CpanelProvider implements
      */
     private function readManifest(object $profile): ?array
     {
+        return $this->readJsonFile($this->absolutePath($this->deployPath($profile)), self::MANIFEST_FILENAME);
+    }
+
+    /**
+     * @param array{domain: string, type: string, created: bool, primary_domain: string} $domain
+     */
+    private function checkDomainRetry(object $project, object $profile, array $domain): ?string
+    {
+        if (! \in_array($domain['type'], ['subdomain', 'addon'], true)) {
+            return null;
+        }
+
+        $identity = [
+            'project' => $this->projectName($project),
+            'profile' => $this->profileName($profile),
+            'deploy_path' => $this->absolutePath($this->deployPath($profile)),
+            'domain' => $domain['domain'],
+            'type' => $domain['type'],
+            'primary_domain' => $domain['primary_domain'],
+        ];
+        $contents = \json_encode($identity, JSON_THROW_ON_ERROR);
+        $filename = '.shipper-domain-'.\hash('sha256', $contents).'.json';
+
+        if ($domain['created']) {
+            // The account home survives deployment directory cleanup and may exist before the document root does.
+            try {
+                $this->uploadContent('/.', $filename, $contents, 'Record cPanel domain retry checkpoint');
+            } catch (Throwable) {
+                // Existing domains are still treated as unowned when a checkpoint cannot be stored.
+                return null;
+            }
+        } else {
+            if ($this->readJsonFile($this->resolveHomeDirectory(), $filename) !== $identity) {
+                return null;
+            }
+
+            $result = $this->api()->uapi('DomainInfo', 'single_domain_data', ['domain' => $domain['domain']]);
+            $root = $result['success'] ? $this->findValueAtKey($result['data'], 'documentroot') : null;
+            if (! \is_string($root) || $this->absolutePath($root) !== $identity['deploy_path']) {
+                throw new RuntimeException('Unable to verify the cPanel domain document root for retry');
+            }
+        }
+
+        // A replacement domain can have the same name and root. This checkpoint never confers ownership.
+        return $filename;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function readJsonFile(string $directory, string $filename): ?array
+    {
         $result = $this->api()->uapi('Fileman', 'get_file_content', [
-            'dir' => $this->absolutePath($this->deployPath($profile)),
-            'file' => self::MANIFEST_FILENAME,
+            'dir' => $directory,
+            'file' => $filename,
             'from_charset' => 'utf-8',
             'to_charset' => 'utf-8',
         ]);
@@ -2206,7 +2273,7 @@ final class CpanelProvider implements
         ]), "Remove Shipper-managed cPanel releases for {$project} ({$profile})");
     }
 
-    private function cleanManagedDirectory(string $directory): void
+    private function cleanManagedDirectory(string $directory, bool $preserveManifest = false): void
     {
         $result = $this->api()->uapi('Fileman', 'list_files', [
             'dir' => $directory,
@@ -2216,10 +2283,15 @@ final class CpanelProvider implements
             return;
         }
 
+        $protected = ['.', '..', '.well-known'];
+        if ($preserveManifest) {
+            $protected[] = self::MANIFEST_FILENAME;
+        }
+
         $names = $this->fileNames($result['data']);
         $managed = [];
         foreach ($names as $name) {
-            if (\in_array($name, ['.', '..', '.well-known'], true)) {
+            if (\in_array($name, $protected, true)) {
                 continue;
             }
             $managed[] = $this->relativeHomePath($directory.'/'.$name);
@@ -2417,7 +2489,7 @@ final class CpanelProvider implements
         }
 
         $webDirectory = \trim($this->projectWebDirectory($project), '/');
-        $exclusions = ['.git', '.github', 'node_modules'];
+        $exclusions = ['.git', '.github', 'node_modules', self::MANIFEST_FILENAME];
 
         try {
             $iterator = new RecursiveIteratorIterator(
@@ -2441,7 +2513,7 @@ final class CpanelProvider implements
 
                 if ($webDirectory !== '' && ($relative === $webDirectory || \str_starts_with($relative, $webDirectory.'/'))) {
                     $publicEntry = \ltrim(\substr($relative, \strlen($webDirectory)), '/');
-                    if ($publicEntry === '') {
+                    if ($publicEntry === '' || $this->isExcludedPath($publicEntry, [self::MANIFEST_FILENAME])) {
                         continue;
                     }
 
@@ -2930,26 +3002,32 @@ final class CpanelProvider implements
         return $primary;
     }
 
-    private function classifyDomain(mixed $data, string $domain, string $key = ''): ?string
+    private function classifyDomain(mixed $data, string $domain, string $type = 'primary'): ?string
     {
         if (! \is_array($data)) {
             return null;
         }
 
         foreach ($data as $itemKey => $value) {
-            $nextKey = \is_string($itemKey) ? $itemKey : $key;
-            if (\is_string($value) && \strtolower($value) === $domain) {
-                $lower = \strtolower($nextKey);
-
-                return match (true) {
-                    \str_contains($lower, 'addon') => 'addon',
-                    \str_contains($lower, 'sub') => 'subdomain',
-                    \str_contains($lower, 'park'), \str_contains($lower, 'alias') => 'alias',
-                    default => 'primary',
-                };
+            $key = \is_string($itemKey) ? \strtolower($itemKey) : '';
+            if ($key === $domain && \is_array($value)) {
+                return $type;
             }
 
-            $found = $this->classifyDomain($value, $domain, $nextKey);
+            $nextType = match ($key) {
+                'addon_domains' => 'addon',
+                'sub_domains' => 'subdomain',
+                'parked_domains', 'alias_domains' => 'alias',
+                'main_domain', 'primary_domain' => 'primary',
+                default => $type,
+            };
+            if (\is_string($value) && \strtolower($value) === $domain
+                && \in_array($key, ['', 'main_domain', 'primary_domain', 'servername', 'domain'], true)
+            ) {
+                return $nextType;
+            }
+
+            $found = $this->classifyDomain($value, $domain, $nextType);
             if ($found !== null) {
                 return $found;
             }
