@@ -34,6 +34,17 @@ Release identifiers cannot contain paths. Shipper cleans only the
 manifest-owned deployment path, preserves `.well-known`, and extracts the
 selected archive through a monitored account task.
 
+## Retry after domain creation
+
+If an initial deploy fails after creating a domain and Shipper can read the
+retry checkpoint, it checks that the current document root matches the
+configured deployment path. A missing or different root stops the retry.
+Check the domain and document root in cPanel before retrying.
+
+A successful retry to a matching root preserves the domain registration on
+destroy. Verify the registration in cPanel and remove it manually if it is
+disposable. The deployment files remain managed by Shipper.
+
 ## Destroy
 
 Destroy refuses to proceed without a manifest belonging to the requested

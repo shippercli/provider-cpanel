@@ -31,6 +31,14 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
     {
         $this->calls[] = compact('module', 'function', 'parameters', 'method') + ['surface' => 'uapi'];
 
+        $file = $parameters['file'] ?? null;
+        if ($module === 'Fileman' && $function === 'get_file_content'
+            && \is_string($file) && \str_starts_with($file, '.shipper-domain-')) {
+            $contents = $this->uploadedFiles[$file] ?? null;
+
+            return $this->success($contents === null ? null : ['content' => $contents]);
+        }
+
         return $this->response("uapi:{$module}:{$function}");
     }
 
@@ -38,7 +46,15 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
     {
         $this->calls[] = compact('module', 'function', 'parameters') + ['surface' => 'api2'];
 
-        return $this->response("api2:{$module}:{$function}");
+        $result = $this->response("api2:{$module}:{$function}");
+        $source = $parameters['sourcefiles'] ?? null;
+        if ($result['success'] && $module === 'Fileman' && $function === 'fileop'
+            && ($parameters['op'] ?? null) === 'trash'
+            && \is_string($source) && \str_starts_with($source, '.shipper-domain-')) {
+            unset($this->uploadedFiles[$source]);
+        }
+
+        return $result;
     }
 
     public function whm(string $function, array $parameters = [], string $method = 'GET'): array
@@ -56,6 +72,17 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
 
     public function uploadFiles(string $directory, array $files, bool $overwrite = true): array
     {
+        $this->calls[] = [
+            'surface' => 'upload',
+            'module' => 'Fileman',
+            'function' => 'upload_files',
+            'parameters' => compact('directory', 'files', 'overwrite'),
+        ];
+        $result = $this->response('upload:Fileman:upload_files');
+        if (! $result['success']) {
+            return $result;
+        }
+
         foreach ($files as $remoteFilename => $localPath) {
             $contents = \file_get_contents($localPath);
             if (\is_string($contents)) {
@@ -77,14 +104,7 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
             }
         }
 
-        $this->calls[] = [
-            'surface' => 'upload',
-            'module' => 'Fileman',
-            'function' => 'upload_files',
-            'parameters' => compact('directory', 'files', 'overwrite'),
-        ];
-
-        return $this->success();
+        return $result;
     }
 
     /** @return array{success: bool, message: string, data: mixed, raw: array<string, mixed>} */

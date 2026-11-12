@@ -275,6 +275,10 @@ final class CpanelProvider implements
             $this->runCustomOperations($profile, 'before_apply', $context);
             $features = $this->required($this->api()->uapi('Features', 'list_features'), 'Discover cPanel features');
             $domainState = $this->ensureDomain($profile);
+            $checkpoint = ! $domainState['created']
+                && ($previousManifest['domain']['domain'] ?? null) === $domainState['domain']
+                ? null
+                : $this->checkDomainRetry($project, $profile, $domainState);
             $domainState = $this->preserveOwnership(
                 $domainState,
                 $previousManifest['domain'] ?? null,
@@ -369,6 +373,17 @@ final class CpanelProvider implements
                 ...$context,
                 'manifest' => $manifest,
             ]);
+            if ($checkpoint !== null) {
+                try {
+                    $this->api()->api2('Fileman', 'fileop', [
+                        'op' => 'trash',
+                        'sourcefiles' => $checkpoint,
+                        'doubledecode' => 1,
+                    ]);
+                } catch (Throwable) {
+                    // A stale checkpoint cannot claim a domain or invalidate a completed deployment.
+                }
+            }
 
             return true;
         } catch (Throwable $exception) {
@@ -1654,9 +1669,61 @@ final class CpanelProvider implements
      */
     private function readManifest(object $profile): ?array
     {
+        return $this->readJsonFile($this->absolutePath($this->deployPath($profile)), self::MANIFEST_FILENAME);
+    }
+
+    /**
+     * @param array{domain: string, type: string, created: bool, primary_domain: string} $domain
+     */
+    private function checkDomainRetry(object $project, object $profile, array $domain): ?string
+    {
+        if (! \in_array($domain['type'], ['subdomain', 'addon'], true)) {
+            return null;
+        }
+
+        $identity = [
+            'project' => $this->projectName($project),
+            'profile' => $this->profileName($profile),
+            'deploy_path' => $this->absolutePath($this->deployPath($profile)),
+            'domain' => $domain['domain'],
+            'type' => $domain['type'],
+            'primary_domain' => $domain['primary_domain'],
+        ];
+        $contents = \json_encode($identity, JSON_THROW_ON_ERROR);
+        $filename = '.shipper-domain-'.\hash('sha256', $contents).'.json';
+
+        if ($domain['created']) {
+            // The account home survives deployment directory cleanup and may exist before the document root does.
+            try {
+                $this->uploadContent('/.', $filename, $contents, 'Record cPanel domain retry checkpoint');
+            } catch (Throwable) {
+                // Existing domains are still treated as unowned when a checkpoint cannot be stored.
+                return null;
+            }
+        } else {
+            if ($this->readJsonFile($this->resolveHomeDirectory(), $filename) !== $identity) {
+                return null;
+            }
+
+            $result = $this->api()->uapi('DomainInfo', 'single_domain_data', ['domain' => $domain['domain']]);
+            $root = $result['success'] ? $this->findValueAtKey($result['data'], 'documentroot') : null;
+            if (! \is_string($root) || $this->absolutePath($root) !== $identity['deploy_path']) {
+                throw new RuntimeException('Unable to verify the cPanel domain document root for retry');
+            }
+        }
+
+        // A replacement domain can have the same name and root. This checkpoint never confers ownership.
+        return $filename;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function readJsonFile(string $directory, string $filename): ?array
+    {
         $result = $this->api()->uapi('Fileman', 'get_file_content', [
-            'dir' => $this->absolutePath($this->deployPath($profile)),
-            'file' => self::MANIFEST_FILENAME,
+            'dir' => $directory,
+            'file' => $filename,
             'from_charset' => 'utf-8',
             'to_charset' => 'utf-8',
         ]);
