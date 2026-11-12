@@ -903,6 +903,59 @@ test('destroy sends the internal subdomain when deleting an addon domain', funct
     ]);
 });
 
+test('destroy reconciles an ambiguous addon deletion against the domain inventory', function (array $inventories, bool $removed): void {
+    $client = new FakeCpanelApiClient;
+    $domain = 'app.shippercli.com';
+    $client->responses['uapi:Fileman:get_file_content'] = $client->success([
+        'content' => \json_encode([
+            'project' => 'sample',
+            'profile' => 'production',
+            'domain' => ['domain' => $domain, 'type' => 'addon', 'created' => true, 'primary_domain' => 'example.com'],
+            'deploy_path' => '/app',
+        ], JSON_THROW_ON_ERROR),
+    ]);
+    $client->responses['api2:AddonDomain:deladdondomain'] = [
+        'success' => false, 'message' => 'cPanel API request timed out', 'data' => null, 'raw' => [],
+    ];
+    $client->responseQueues['uapi:DomainInfo:list_domains'] = \array_map($client->success(...), $inventories);
+    $provider = cpanelProviderWithExistingDomain($client);
+
+    expect($provider->destroy(
+        new CpanelTestProject('.'),
+        new CpanelTestProfile([
+            'domain' => $domain,
+            'deploy_path' => '/app',
+            'cpanel' => [
+                'domain_reconciliation_timeout' => \count($inventories) > 1 ? 1 : 0,
+                'domain_reconciliation_interval_ms' => 0,
+            ],
+        ]),
+    ))->toBe($removed)
+        ->and(cpanelProviderCalls($client, 'api2', 'AddonDomain', 'deladdondomain'))->toHaveCount(1)
+        ->and(cpanelProviderCalls($client, 'uapi', 'DomainInfo', 'list_domains'))->toHaveCount(\count($inventories))
+        ->and(cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'))->toHaveCount($removed ? 1 : 0);
+
+    if (! $removed) {
+        expect($provider->getLastError())->toContain('cPanel API request timed out');
+    }
+})->with([
+    'domain is absent' => [
+        [
+            ['main_domain' => 'example.com', 'addon_domains' => ['app.shippercli.com'], 'sub_domains' => [], 'parked_domains' => []],
+            ['main_domain' => 'example.com', 'addon_domains' => [], 'sub_domains' => [], 'parked_domains' => []],
+        ],
+        true,
+    ],
+    'domain is still present' => [
+        [['main_domain' => 'example.com', 'addon_domains' => ['APP.SHIPPERCLI.COM'], 'sub_domains' => [], 'parked_domains' => []]],
+        false,
+    ],
+    'inventory is incomplete' => [
+        [['main_domain' => 'example.com', 'addon_domains' => [], 'sub_domains' => []]],
+        false,
+    ],
+]);
+
 test('destroy protects the account web root', function (): void {
     $client = new FakeCpanelApiClient;
     $client->responses['uapi:Fileman:get_file_content'] = $client->success([
