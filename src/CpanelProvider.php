@@ -1438,7 +1438,11 @@ final class CpanelProvider implements
                 throw new RuntimeException("Invalid environment variable name: {$name}");
             }
 
-            $lines[] = $name.'='.\json_encode($value, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+            $lines[] = $name.'="'.\str_replace(
+                ['\\', '"', '$', "\r", "\n", "\t", "\f", "\v"],
+                ['\\\\', '\\"', '\\$', '\\r', '\\n', '\\t', '\\f', '\\v'],
+                $value,
+            ).'"';
         }
 
         $this->uploadContent(
