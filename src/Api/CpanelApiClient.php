@@ -6,6 +6,7 @@ namespace ShipperCli\ProviderCpanel\Api;
 
 use GuzzleHttp\Client;
 use GuzzleHttp\ClientInterface;
+use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\Exception\RequestException;
 use InvalidArgumentException;
@@ -162,6 +163,10 @@ final class CpanelApiClient implements CpanelApiClientInterface
                 $options,
             );
 
+            if ($response->getStatusCode() >= 300 && $response->getStatusCode() < 400) {
+                return $this->failedResponse('cPanel API redirects are not allowed');
+            }
+
             $result = $this->normalizeResponse($this->decode((string) $response->getBody()), 'uapi');
             $data = \is_array($result['data']) ? $result['data'] : [];
             $uploads = \is_array($data['uploads'] ?? null) ? $data['uploads'] : [];
@@ -221,6 +226,10 @@ final class CpanelApiClient implements CpanelApiClientInterface
         try {
             $response = $this->client()->request($method, $url, $options);
 
+            if ($response->getStatusCode() >= 300 && $response->getStatusCode() < 400) {
+                return $this->failedResponse('cPanel API redirects are not allowed');
+            }
+
             return $this->normalizeResponse($this->decode((string) $response->getBody()), $surface);
         } catch (GuzzleException|JsonException $exception) {
             return $this->exceptionResponse($exception);
@@ -237,6 +246,7 @@ final class CpanelApiClient implements CpanelApiClientInterface
         $usesToken = $whm ? $this->usesWhmApiToken : $this->usesApiToken;
         $options = [
             'http_errors' => true,
+            'allow_redirects' => false,
             'timeout' => 60,
             'verify' => $this->verifyTls,
         ];
@@ -497,6 +507,12 @@ final class CpanelApiClient implements CpanelApiClientInterface
         }
         if ($exception instanceof RequestException && $exception->hasResponse()) {
             return $this->failedResponse('cPanel API request failed with HTTP '.$exception->getResponse()->getStatusCode());
+        }
+
+        if (($exception instanceof ConnectException || $exception instanceof RequestException)
+            && ($exception->getHandlerContext()['errno'] ?? null) === 28
+        ) {
+            return $this->failedResponse('cPanel API request timed out');
         }
 
         return $this->failedResponse('cPanel API transport failed');

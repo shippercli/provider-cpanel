@@ -52,11 +52,22 @@ compatibility. Successful API data and application logs are not automatically
 redacted by this check.
 
 
-HTTP failures report a status code; connection and JSON decoding failures use
-fixed error categories. Request URLs, response bodies and raw exception text
+HTTP failures report a status code. Connection, timeout, and JSON decoding
+failures use fixed messages. Request URLs, response bodies and raw exception text
 are omitted from these diagnostics because they can contain credentials.
 This covers transport/JSON exceptions, including uploads; API-level JSON error
 payloads and custom operation output still require separate review.
+
+## Retry after domain creation
+
+If an initial deploy fails after creating a domain and Shipper can read the
+retry checkpoint, it checks that the current document root matches the
+configured deployment path. A missing or different root stops the retry.
+Check the domain and document root in cPanel before retrying.
+
+A successful retry to a matching root preserves the domain registration on
+destroy. Verify the registration in cPanel and remove it manually if it is
+disposable. The deployment files remain managed by Shipper.
 
 ## Destroy
 

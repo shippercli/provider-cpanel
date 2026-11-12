@@ -50,6 +50,19 @@ test('upload HTTP failures do not expose remote response text', function (): voi
     }
 });
 
+test('cURL timeouts retain a safe timeout diagnostic for reconciliation', function (): void {
+    $history = [];
+    $request = new Request('POST', 'https://cpanel.example.com/?token=synthetic-token');
+    $client = cpanelTestClient([new ConnectException('Timed out with synthetic-token', $request, null, ['errno' => 28])], $history);
+    $api = new CpanelApiClient(['host' => 'cpanel.example.com', 'username' => 'shipper', 'api_token' => 'synthetic-token'], $client);
+
+    $result = $api->uapi('SubDomain', 'addsubdomain');
+
+    expect($result['success'])->toBeFalse()
+        ->and($result['message'])->toBe('cPanel API request timed out')
+        ->and(json_encode($result))->not->toContain('synthetic-token', 'https://');
+});
+
 test('invalid JSON produces a fixed safe diagnostic', function (): void {
     $history = [];
     $client = cpanelTestClient([new Response(200, [], 'not JSON synthetic-token')], $history);

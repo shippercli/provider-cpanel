@@ -163,6 +163,40 @@ test('fileman apply creates directories and uploads mapped files', function (): 
         ->and($client->uploadedFiles)->toHaveKey('.shipper-manifest.json');
 });
 
+test('fileman apply keeps the last successful manifest when deployment fails after cleanup', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+    $client->responses['uapi:Fileman:list_files'] = $client->success([
+        ['file' => '.shipper-manifest.json'],
+        ['file' => 'old.html'],
+    ]);
+    $client->responses['uapi:Fileman:get_file_content'] = $client->success([
+        'content' => '{"project":"sample","profile":"production"}',
+    ]);
+    $client->responses['api2:Cron:add_line'] = [
+        'success' => false, 'message' => 'Extraction failed', 'data' => null, 'raw' => [],
+    ];
+    $profile = new CpanelTestProfile([
+        'domain' => 'app.example.com',
+        'deploy_path' => '/app',
+        'runtime' => ['type' => 'static'],
+        'cpanel' => ['archive_extraction' => 'cron'],
+    ]);
+
+    $project = new CpanelTestProject(cpanelProviderFixture([
+        'index.html' => 'new release',
+        '.shipper-manifest.json' => '{}',
+    ]));
+
+    expect($provider->apply($project, $profile))->toBeFalse()
+        ->and($client->uploadedArchiveEntries)->not->toContain('.shipper-manifest.json')
+        ->and($client->uploadedFiles)->not->toHaveKey('.shipper-manifest.json')
+        ->and($provider->getLastError())->toContain('Extraction failed');
+
+    $operations = cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop');
+    expect($operations[0]['parameters']['sourcefiles'])->toBe('app/old.html');
+});
+
 test('fileman can extract one archive through a monitored cpanel task', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [
@@ -204,6 +238,7 @@ test('public web directory archives keep the application and publish its web roo
             'bootstrap/app.php' => '<?php',
             'public/index.php' => "<?php require __DIR__.'/../vendor/autoload.php';",
             'public/app.css' => 'body {}',
+            'public/.shipper-manifest.json/extra' => '{}',
         ]),
         webDirectory: '/public',
     );
@@ -213,6 +248,7 @@ test('public web directory archives keep the application and publish its web roo
         'deploy_path' => '/laravel',
         'runtime' => ['type' => 'php', 'version' => '8.4'],
     ])))->toBeTrue()
+        ->and($client->uploadedPaths)->not->toHaveKey('laravel/.shipper-manifest.json/extra')
         ->and($client->uploadedPaths)->toHaveKeys([
             'laravel/app/composer.json',
             'laravel/app/bootstrap/app.php',
@@ -529,8 +565,9 @@ test('git deployment reports a redacted cpanel clone failure', function (): void
         ]),
     ))->toBeFalse()
         ->and($provider->getLastError())
-        ->toBe("cPanel Git repository creation failed: fatal: unable to access 'https://***@github.com/shippercli/sample.git': Could not resolve host: github.com")
-        ->and(cpanelProviderCalls($client, 'uapi', 'Fileman', 'get_file_content'))->toHaveCount(2);
+        ->toBe("cPanel Git repository creation failed: fatal: unable to access 'https://***@github.com/shippercli/sample.git': Could not resolve host: github.com");
+    $reads = cpanelProviderCalls($client, 'uapi', 'Fileman', 'get_file_content');
+    expect(\array_column(\array_column($reads, 'parameters'), 'file'))->toContain(\basename($logPath));
 });
 
 test('git deployment waits for the current task instead of a historical success', function (): void {
@@ -915,6 +952,118 @@ test('provider reports cpanel API failures without throwing from apply', functio
     ))->toBeFalse()
         ->and($provider->getLastError())->toContain('Authentication failed');
 });
+
+test('initial apply succeeds when the domain retry checkpoint cannot be uploaded', function (): void {
+    $client = new FakeCpanelApiClient;
+    $client->responses['uapi:DomainInfo:domains_data'] = $client->success([
+        'main_domain' => 'example.com',
+        'sub_domains' => [],
+    ]);
+    $client->responseQueues['upload:Fileman:upload_files'] = [
+        ['success' => false, 'message' => 'Upload unavailable', 'data' => null, 'raw' => []],
+    ];
+    $provider = new CpanelProvider([
+        'host' => 'cpanel.example.com',
+        'username' => 'shipper',
+        'password' => 'secret',
+        'deployment_method' => 'fileman',
+    ], $client);
+
+    expect($provider->apply(
+        new CpanelTestProject(cpanelProviderFixture()),
+        new CpanelTestProfile([
+            'domain' => 'preview.example.com',
+            'deploy_path' => '/preview',
+            'runtime' => ['type' => 'static'],
+            'cpanel' => ['domain_type' => 'subdomain', 'archive_extraction' => 'direct'],
+        ]),
+    ))->toBeTrue();
+
+    $manifest = \json_decode($client->uploadedFiles['.shipper-manifest.json'], true);
+    expect($manifest['domain']['created'])->toBeTrue();
+});
+
+test('retry after a failed first apply checks the current document root', function (
+    ?string $documentRoot,
+    bool $cleanupFails = false,
+): void {
+    $client = new FakeCpanelApiClient;
+    $client->responseQueues['uapi:DomainInfo:domains_data'] = [
+        $client->success(['main_domain' => 'example.com', 'sub_domains' => []]),
+        $client->success([
+            'main_domain' => 'example.com',
+            'sub_domains' => [['servername' => 'preview.example.com']],
+        ]),
+    ];
+    $client->responseQueues['api2:Fileman:mkdir'] = [
+        ['success' => false, 'message' => 'Directory operation failed', 'data' => null, 'raw' => []],
+    ];
+    $config = [
+        'host' => 'cpanel.example.com',
+        'username' => 'shipper',
+        'password' => 'secret',
+        'deployment_method' => 'fileman',
+    ];
+    $provider = new CpanelProvider($config, $client);
+    $project = new CpanelTestProject(cpanelProviderFixture());
+    $profile = new CpanelTestProfile([
+        'domain' => 'preview.example.com',
+        'deploy_path' => '/preview',
+        'runtime' => ['type' => 'static'],
+        'cpanel' => ['domain_type' => 'subdomain', 'archive_extraction' => 'direct'],
+    ]);
+
+    expect($provider->apply($project, $profile))->toBeFalse()
+        ->and($provider->getLastError())->toContain('Directory operation failed');
+
+    expect($client->uploadedFiles)->not->toHaveKey('.shipper-manifest.json');
+    $checkpoint = \array_key_first($client->uploadedFiles);
+    expect($checkpoint)->toStartWith('.shipper-domain-');
+    $client->responseQueues['uapi:DomainInfo:single_domain_data'] = [
+        $client->success(['documentroot' => $documentRoot]),
+    ];
+    if ($cleanupFails) {
+        $client->responses['api2:Fileman:fileop'] = [
+            'success' => false,
+            'message' => 'Trash unavailable',
+            'data' => null,
+            'raw' => [],
+        ];
+    }
+    $provider = new CpanelProvider($config, $client);
+
+    if ($documentRoot !== '/home/shipper/preview') {
+        expect($provider->apply($project, $profile))->toBeFalse()
+            ->and($provider->getLastError())->toContain('Unable to verify the cPanel domain document root')
+            ->and($client->uploadedFiles)->not->toHaveKey('.shipper-manifest.json')
+            ->and(cpanelProviderCalls($client, 'uapi', 'SubDomain', 'addsubdomain'))->toHaveCount(1);
+
+        return;
+    }
+
+    expect($provider->apply($project, $profile))->toBeTrue()
+        ->and(cpanelProviderCalls($client, 'uapi', 'SubDomain', 'addsubdomain'))->toHaveCount(1);
+
+    $manifest = \json_decode($client->uploadedFiles['.shipper-manifest.json'], true);
+    expect($manifest['domain']['type'])->toBe('subdomain')
+        ->and($manifest['domain']['created'])->toBeFalse()
+        ->and(\array_key_exists($checkpoint, $client->uploadedFiles))->toBe($cleanupFails);
+
+    if ($cleanupFails) {
+        $client->responses['uapi:Fileman:get_file_content'] = $client->success([
+            'content' => $client->uploadedFiles['.shipper-manifest.json'],
+        ]);
+        $client->responses['uapi:DomainInfo:domains_data'] =
+            $client->success(['main_domain' => 'example.com', 'sub_domains' => ['preview.example.com']]);
+        expect($provider->apply($project, $profile))->toBeTrue()
+            ->and(cpanelProviderCalls($client, 'uapi', 'DomainInfo', 'single_domain_data'))->toHaveCount(1);
+    }
+})->with([
+    'matching root' => ['/home/shipper/preview'],
+    'checkpoint cleanup fails' => ['/home/shipper/preview', true],
+    'repointed domain' => ['/home/shipper/replacement'],
+    'missing root' => [null],
+]);
 
 test('repeated apply preserves ownership needed for safe destroy', function (): void {
     $client = new FakeCpanelApiClient;
