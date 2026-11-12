@@ -71,6 +71,11 @@ databases:
 names with the account username. Shipper injects the resolved names into the
 deployment environment.
 
+Generated `.env` files use Laravel's PHP dotenv quoting rules. They preserve
+literal values, including dollar signs, Unicode, quotes, backslashes, and line
+breaks. Laravel reads `${OTHER_VARIABLE}` in a value literally. Shipper
+resolves configuration placeholders before writing the file.
+
 ## Releases
 
 ```yaml
