@@ -50,8 +50,8 @@ final class FakeCpanelApiClient implements CpanelApiClientInterface
         $source = $parameters['sourcefiles'] ?? null;
         if ($result['success'] && $module === 'Fileman' && $function === 'fileop'
             && ($parameters['op'] ?? null) === 'trash'
-            && \is_string($source) && \str_starts_with($source, '.shipper-domain-')) {
-            unset($this->uploadedFiles[$source]);
+            && \is_string($source) && \str_starts_with($source, '/home/shipper/.shipper-domain-')) {
+            unset($this->uploadedFiles[\basename($source)]);
         }
 
         return $result;

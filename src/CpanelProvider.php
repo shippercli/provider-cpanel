@@ -377,7 +377,7 @@ final class CpanelProvider implements
                 try {
                     $this->api()->api2('Fileman', 'fileop', [
                         'op' => 'trash',
-                        'sourcefiles' => $checkpoint,
+                        'sourcefiles' => $this->resolveHomeDirectory().'/'.$checkpoint,
                         'doubledecode' => 1,
                     ]);
                 } catch (Throwable) {
