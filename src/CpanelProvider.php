@@ -1325,6 +1325,15 @@ final class CpanelProvider implements
                 $summary[$key] = $deployment[$key];
             }
         }
+        if (\is_string($deployment['extraction'] ?? null)) {
+            $summary['extraction'] = $deployment['extraction'];
+        }
+        if (\is_bool($deployment['repository_created'] ?? null)) {
+            $summary['repository_created'] = $deployment['repository_created'];
+        }
+        if (\array_key_exists('repository_root', $deployment) && $deployment['repository_root'] === null) {
+            $summary['repository_root'] = null;
+        }
         if (\is_array($deployment['task'] ?? null)) {
             $summary['task'] = $this->deploymentStatusSummary($deployment['task']);
         }
