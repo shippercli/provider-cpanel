@@ -413,9 +413,11 @@ final class CpanelProvider implements
                 'manifest' => $manifest,
             ];
             $this->runCustomOperations($profile, 'before_destroy', $context);
+            $accountResources = new CpanelAccountResourceManager($this->api());
+            $accountResources->destroyDnsRecords($manifest);
             $this->destroyCron($manifest);
             $this->destroyPassenger($manifest);
-            (new CpanelAccountResourceManager($this->api()))->destroy($manifest);
+            $accountResources->destroy($manifest);
             $this->destroyDatabases($manifest);
             $this->destroyGitRepository($manifest);
             $this->destroyAliases($manifest, $profile);

@@ -372,7 +372,7 @@ test('custom SSL sends the certificate and chain in the cPanel POST body', funct
         ]]);
 });
 
-test('dns email and ftp resources are reconciled without leaking credentials and safely destroyed', function (): void {
+test('dns email and ftp resources are reconciled without leaking credentials and safely destroyed', function (bool $dnsRemoved): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [
         'deployment_method' => 'fileman',
@@ -404,6 +404,7 @@ test('dns email and ftp resources are reconciled without leaking credentials and
     $client->responseQueues['uapi:DNS:parse_zone'] = [
         $client->success([$soa]),
         $client->success([$soa, $txt]),
+        $client->success($dnsRemoved ? [$soa] : [$soa, $txt]),
     ];
     $client->responses['uapi:Email:list_pops'] = $client->success([]);
     $client->responses['uapi:Email:list_forwarders'] = $client->success([]);
@@ -469,9 +470,31 @@ test('dns email and ftp resources are reconciled without leaking credentials and
         'content' => \json_encode($manifest, JSON_THROW_ON_ERROR),
     ]);
 
-    expect($provider->destroy(new CpanelTestProject('.'), $profile))->toBeTrue()
-        ->and(cpanelProviderCalls($client, 'uapi', 'DNS', 'mass_edit_zone'))->toHaveCount(2)
-        ->and(cpanelProviderCalls($client, 'uapi', 'Email', 'delete_pop'))->toHaveCount(1)
+    expect($provider->destroy(new CpanelTestProject('.'), $profile))->toBe($dnsRemoved)
+        ->and(cpanelProviderCalls($client, 'uapi', 'DNS', 'mass_edit_zone'))->toHaveCount(2);
+
+    if (! $dnsRemoved) {
+        expect($provider->getLastError())->toContain('still lists Shipper-managed DNS record')
+            ->not->toContain('verification-token');
+        expect(cpanelProviderCalls($client, 'uapi', 'Email', 'delete_pop'))->toBeEmpty()
+            ->and(cpanelProviderCalls($client, 'uapi', 'Email', 'delete_forwarder'))->toBeEmpty()
+            ->and(cpanelProviderCalls($client, 'uapi', 'Ftp', 'delete_ftp'))->toBeEmpty();
+        $deploymentTrashCalls = \array_filter(
+            cpanelProviderCalls($client, 'api2', 'Fileman', 'fileop'),
+            static fn (array $call): bool => ($call['parameters']['op'] ?? null) === 'trash'
+                && ($call['parameters']['sourcefiles'] ?? null) === 'account-resources',
+        );
+        expect($deploymentTrashCalls)->toBeEmpty();
+
+        $client->responseQueues['uapi:DNS:parse_zone'] = [
+            $client->success([$soa, $txt]),
+            $client->success([$soa]),
+        ];
+        expect($provider->destroy(new CpanelTestProject('.'), $profile))->toBeTrue()
+            ->and(cpanelProviderCalls($client, 'uapi', 'DNS', 'mass_edit_zone'))->toHaveCount(3);
+    }
+
+    expect(cpanelProviderCalls($client, 'uapi', 'Email', 'delete_pop'))->toHaveCount(1)
         ->and(cpanelProviderCalls($client, 'uapi', 'Email', 'delete_forwarder'))->toHaveCount(1)
         ->and(cpanelProviderCalls($client, 'uapi', 'Ftp', 'delete_ftp'))->toHaveCount(1);
 
@@ -481,7 +504,10 @@ test('dns email and ftp resources are reconciled without leaking credentials and
     expect($dnsDelete['parameters']['remove'])->toBe([9])
         ->and($mailDelete['parameters'])->not->toHaveKey('flags')
         ->and($ftpDelete['parameters']['destroy'])->toBe(0);
-});
+})->with([
+    'confirmed DNS removal' => true,
+    'cPanel acknowledges removal but retains the DNS record' => false,
+]);
 
 test('node applications are registered with passenger', function (): void {
     $client = new FakeCpanelApiClient;
