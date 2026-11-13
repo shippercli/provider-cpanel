@@ -52,6 +52,16 @@ final class CpanelAccountResourceManager
     }
 
     /** @param array<string, mixed> $manifest */
+    public function destroyDnsRecords(array $manifest): void
+    {
+        foreach ($this->manifestResources($manifest, 'dns_records') as $record) {
+            if ((bool) ($record['created'] ?? false)) {
+                $this->deleteDnsRecord($record);
+            }
+        }
+    }
+
+    /** @param array<string, mixed> $manifest */
     public function destroy(array $manifest): void
     {
         foreach ($this->manifestResources($manifest, 'email_forwarders') as $forwarder) {
@@ -69,12 +79,6 @@ final class CpanelAccountResourceManager
         foreach ($this->manifestResources($manifest, 'ftp_accounts') as $account) {
             if ((bool) ($account['created'] ?? false)) {
                 $this->deleteFtpAccount($account);
-            }
-        }
-
-        foreach ($this->manifestResources($manifest, 'dns_records') as $record) {
-            if ((bool) ($record['created'] ?? false)) {
-                $this->deleteDnsRecord($record);
             }
         }
     }
@@ -401,6 +405,11 @@ final class CpanelAccountResourceManager
         $this->editDnsZone($zone, [
             'remove' => [$existing['line_index']],
         ], "Delete Shipper-managed cPanel DNS record {$record['name']} {$record['type']}");
+
+        $updatedZone = $this->parseDnsZone($record['zone']);
+        if ($this->matchingDnsRecord($updatedZone['records'], $record) !== null) {
+            throw new RuntimeException("cPanel still lists Shipper-managed DNS record {$record['name']} {$record['type']} after deletion");
+        }
     }
 
     /** @param array<string, mixed> $account */
