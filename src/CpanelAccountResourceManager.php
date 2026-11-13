@@ -159,6 +159,7 @@ final class CpanelAccountResourceManager
         $existing = $this->required($this->api->uapi('Email', 'list_pops', [
             'skip_main' => 1,
         ]), 'List cPanel email accounts');
+        $this->assertAccountInventory($existing, ['email' => '']);
         $state = [];
 
         foreach ($configured as $account) {
@@ -249,6 +250,7 @@ final class CpanelAccountResourceManager
             $this->api->uapi('Email', 'list_forwarders'),
             'List cPanel email forwarders',
         );
+        $this->assertAccountInventory($existing, ['dest' => '']);
         $state = [];
 
         foreach ($configured as $forwarder) {
@@ -302,6 +304,7 @@ final class CpanelAccountResourceManager
         }
 
         $existing = $this->required($this->api->uapi('Ftp', 'list_ftp'), 'List cPanel FTP accounts');
+        $this->assertAccountInventory($existing, ['user' => '']);
         $state = [];
 
         foreach ($configured as $account) {
@@ -662,25 +665,50 @@ final class CpanelAccountResourceManager
     }
 
     /** @param array<string, string> $expected */
+    private function assertAccountInventory(mixed $data, array $expected): void
+    {
+        if (! \is_array($data) || ! \array_is_list($data)) {
+            throw new RuntimeException('Unreadable cPanel account resource inventory');
+        }
+
+        $identities = [];
+        foreach ($data as $row) {
+            if (! \is_array($row)) {
+                throw new RuntimeException('Unreadable cPanel account resource inventory');
+            }
+            $identity = match (true) {
+                isset($expected['dest']) => [$row['dest'] ?? null, $row['forward'] ?? null],
+                isset($expected['user']) => [$row['user'] ?? null],
+                default => [$row['email'] ?? $row['login'] ?? null],
+            };
+            foreach ($identity as $value) {
+                if (! \is_string($value) || $value === '') {
+                    throw new RuntimeException('Unreadable cPanel account resource inventory');
+                }
+            }
+            $key = \json_encode($identity, JSON_THROW_ON_ERROR);
+            if (isset($identities[$key])) {
+                throw new RuntimeException('Ambiguous cPanel account resource inventory');
+            }
+            $identities[$key] = true;
+        }
+
+    }
+
+    /** @param array<string, string> $expected */
     private function recordExists(mixed $data, array $expected): bool
     {
-        if (! \is_array($data)) {
-            return false;
-        }
+        $this->assertAccountInventory($data, $expected);
 
-        $matches = true;
-        foreach ($expected as $key => $value) {
-            if (($data[$key] ?? null) !== $value) {
-                $matches = false;
-                break;
+        foreach ($data as $row) {
+            $matches = true;
+            foreach ($expected as $key => $value) {
+                if (($row[$key] ?? null) !== $value) {
+                    $matches = false;
+                    break;
+                }
             }
-        }
-        if ($matches) {
-            return true;
-        }
-
-        foreach ($data as $value) {
-            if ($this->recordExists($value, $expected)) {
+            if ($matches) {
                 return true;
             }
         }

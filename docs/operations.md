@@ -1,5 +1,8 @@
 # cPanel deployment operations
 
+[Account inventory validation](account-inventories.md) describes how unreadable
+mail and FTP inventories stop reconciliation.
+
 ## Status
 
 `shipper status` reports:
