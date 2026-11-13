@@ -1647,8 +1647,8 @@ final class CpanelProvider implements
                 'domain' => $domain,
                 'cert' => $this->fileOrValue($ssl['certificate']),
                 'key' => $this->fileOrValue($ssl['private_key']),
-                'ca_bundle' => $this->fileOrValue($ssl['ca_bundle']),
-            ]), "Install custom SSL certificate for {$domain}");
+                'cabundle' => $this->fileOrValue($ssl['ca_bundle']),
+            ], 'POST'), "Install custom SSL certificate for {$domain}");
         } else {
             $this->required($this->api()->uapi('SSL', 'remove_autossl_excluded_domains', [
                 'domains' => $domain,

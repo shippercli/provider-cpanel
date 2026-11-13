@@ -338,6 +338,40 @@ test('php mysql cron redirect ssl and alias lifecycle is applied through cpanel 
         );
 });
 
+test('custom SSL sends the certificate and chain in the cPanel POST body', function (): void {
+    $client = new FakeCpanelApiClient;
+    $provider = cpanelProviderWithExistingDomain($client, ['deployment_method' => 'fileman']);
+
+    $result = $provider->apply(
+        new CpanelTestProject(cpanelProviderFixture()),
+        new CpanelTestProfile([
+            'domain' => 'app.example.com',
+            'deploy_path' => '/php-app',
+            'ssl' => [
+                'enabled' => true,
+                'type' => 'custom',
+                'certificate' => 'test-certificate',
+                'private_key' => 'test-key',
+                'ca_bundle' => 'test-chain',
+            ],
+        ]),
+    );
+
+    expect($result)->toBeTrue()
+        ->and(cpanelProviderCalls($client, 'uapi', 'SSL', 'install_ssl'))->toBe([[
+            'module' => 'SSL',
+            'function' => 'install_ssl',
+            'parameters' => [
+                'domain' => 'app.example.com',
+                'cert' => 'test-certificate',
+                'key' => 'test-key',
+                'cabundle' => 'test-chain',
+            ],
+            'method' => 'POST',
+            'surface' => 'uapi',
+        ]]);
+});
+
 test('dns email and ftp resources are reconciled without leaking credentials and safely destroyed', function (): void {
     $client = new FakeCpanelApiClient;
     $provider = cpanelProviderWithExistingDomain($client, [
