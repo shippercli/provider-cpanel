@@ -13,6 +13,9 @@ implementation is bundled into the CLI.
 
 ## Configure
 
+Use explicit YAML booleans for deployment flags. See the
+[deployment boolean guide](docs/deployment-booleans.md) for defaults and checks.
+
 Use a cPanel API token when the hosting provider allows one. Password
 authentication remains available for hosts that do not expose account tokens.
 
