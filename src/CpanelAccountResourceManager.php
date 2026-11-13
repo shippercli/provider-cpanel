@@ -493,30 +493,35 @@ final class CpanelAccountResourceManager
         $records = [];
         $serial = null;
 
+        $indices = [];
         foreach ($rows as $row) {
-            if (($row['type'] ?? null) !== 'record'
-                || ! \is_string($row['record_type'] ?? null)
-                || ! \is_numeric($row['line_index'] ?? null)) {
-                continue;
+            $line = $this->dnsUnsignedInteger($row['line_index'] ?? null);
+            $ttl = $this->dnsUnsignedInteger($row['ttl'] ?? null);
+            if ($line === null || $ttl === null || isset($indices[$line])
+                || ! \is_string($row['record_type'] ?? null) || $row['record_type'] === '') {
+                throw new RuntimeException('Invalid cPanel DNS record identity');
             }
-
+            $indices[$line] = true;
             $type = \strtoupper($row['record_type']);
-            $decodedData = $this->decodeDnsData($row['data_b64'] ?? []);
-            if ($type === 'SOA' && isset($decodedData[2]) && \is_numeric($decodedData[2])) {
-                $serial = (int) $decodedData[2];
-            }
-
+            $decodedData = $this->decodeDnsData($row['data_b64'] ?? null);
             $decodedName = $this->decodeBase64($row['dname_b64'] ?? null);
-            if ($decodedName === null) {
-                continue;
+            if ($decodedName === null || \preg_match('/^[^\s\x00-\x1f\x7f]+$/uD', $decodedName) !== 1) {
+                throw new RuntimeException('Unreadable cPanel DNS record name');
             }
-
+            $name = $decodedName === '@' ? $zone : $this->normalizeDnsName($decodedName, $zone);
+            if ($type === 'SOA') {
+                $value = $this->dnsUnsignedInteger($decodedData[2] ?? null);
+                if ($serial !== null || $name !== $zone || $value === null) {
+                    throw new RuntimeException('Invalid or ambiguous cPanel DNS SOA serial');
+                }
+                $serial = $value;
+            }
             $records[] = [
-                'line_index' => (int) $row['line_index'],
-                'name' => $this->normalizeDnsName($decodedName, $zone),
+                'line_index' => $line,
+                'name' => $name,
                 'type' => $type,
                 'data_hash' => $this->dnsDataHash($type, $decodedData),
-                'ttl' => \is_numeric($row['ttl'] ?? null) ? (int) $row['ttl'] : 0,
+                'ttl' => $ttl,
             ];
         }
 
@@ -562,33 +567,47 @@ final class CpanelAccountResourceManager
     private function collectDnsRows(mixed $value, array &$rows): void
     {
         if (! \is_array($value)) {
+            throw new RuntimeException('Unreadable cPanel DNS inventory');
+        }
+        if (\array_key_exists('type', $value)) {
+            if ($value['type'] === 'record') {
+                $rows[] = $value;
+            } elseif (! \in_array($value['type'], ['comment', 'blank', 'control'], true)
+                || \array_key_exists('record_type', $value) || \array_key_exists('dname_b64', $value)) {
+                throw new RuntimeException('Unknown cPanel DNS inventory row type');
+            }
             return;
         }
-
-        if (isset($value['type'], $value['line_index'])) {
-            $rows[] = $value;
-
-            return;
+        if (\array_key_exists('record_type', $value) || \array_key_exists('dname_b64', $value)) {
+            throw new RuntimeException('Malformed cPanel DNS record');
         }
-
         foreach ($value as $item) {
             $this->collectDnsRows($item, $rows);
         }
     }
 
+    private function dnsUnsignedInteger(mixed $value): ?int
+    {
+        if (\is_string($value) && \preg_match('/^(0|[1-9][0-9]{0,9})$/D', $value)) {
+            $value = (int) $value;
+        }
+
+        return \is_int($value) && $value >= 0 && $value <= 4294967295 ? $value : null;
+    }
+
     /** @return array<int, string> */
     private function decodeDnsData(mixed $data): array
     {
-        if (! \is_array($data)) {
-            return [];
+        if (! \is_array($data) || ! \array_is_list($data) || $data === []) {
+            throw new RuntimeException('Unreadable cPanel DNS record data');
         }
-
         $decoded = [];
         foreach ($data as $value) {
             $item = $this->decodeBase64($value);
-            if ($item !== null) {
-                $decoded[] = $item;
+            if ($item === null) {
+                throw new RuntimeException('Unreadable cPanel DNS record data');
             }
+            $decoded[] = $item;
         }
 
         return $decoded;
