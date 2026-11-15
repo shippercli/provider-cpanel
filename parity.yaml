@@ -1,0 +1,20 @@
+settings:
+  namespace_roots:
+    src: ShipperCli\ProviderCpanel
+    tests: ShipperCli\ProviderCpanel\Tests
+
+coverage_xml: .parity/per-test
+
+test:
+  command: "XDEBUG_MODE=coverage vendor/bin/pest {test_abs} --coverage-filter=src --coverage-clover={coverage} --colors=never"
+  coverage: ".parity/tmp/{slug}.xml"
+  reports: ".parity/per-test"
+
+structure:
+  - name: cPanel provider
+    paths:
+      source: src
+      test: tests
+    file_map:
+      Api/CpanelApiClient.php: CpanelApiClientTest.php
+    rules: []
