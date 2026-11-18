@@ -82,3 +82,5 @@ only type, version, application root, base URI and the dependency-install flag
 are included. PHP INI directives can contain credentials or command arguments
 and are omitted from these outputs. The full configured directives continue to
 be used when applying runtime configuration.
+
+[![advertisement](https://ads.servead.net/i/fd100ce5-17f8-4c0d-9878-d1c33ae0653b.svg)](https://ads.servead.net/c/fd100ce5-17f8-4c0d-9878-d1c33ae0653b)
